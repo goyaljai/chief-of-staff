@@ -27,6 +27,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    PicklePersistence,
     filters,
 )
 
@@ -65,13 +66,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _deny(update)
         return ConversationHandler.END
     await update.message.reply_text(
-        "👋 I'm your chief of staff.\n\n"
-        "Send me any task — code, research, writing, analysis. "
-        "I'll ask up to 5 quick questions, then run it. "
+        "Hi — I'm your chief of staff.\n\n"
+        "Send me any task — code, research, writing, analysis.\n"
+        "I'll ask 3-5 quick questions, then run it end to end.\n"
         "I'll only ping you when I genuinely need a decision.\n\n"
-        "Commands:\n"
-        "/status — list active tasks\n"
-        "/cancel — abandon the current conversation",
+        "Commands\n"
+        "  /status   — list recent tasks\n"
+        "  /reset    — forget current task, start fresh\n"
+        "  /cancel   — abandon current conversation\n\n"
+        "Tip: while a task is running, any text you send gets folded\n"
+        "into it as a side note. Use 'new: <task>' to start a fresh one.",
     )
     return ConversationHandler.END
 
@@ -99,6 +103,15 @@ async def cmd_cancel_conv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _whitelisted(update):
+        await _deny(update)
+        return ConversationHandler.END
+    context.chat_data.pop("task_id", None)
+    await update.message.reply_text("Active task forgotten. Next message starts a fresh task.")
+    return ConversationHandler.END
+
+
 async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _whitelisted(update):
         await _deny(update)
@@ -107,6 +120,37 @@ async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task = update.message.text.strip()
     if task.startswith("/"):
         return ConversationHandler.END
+
+    if task.lower().startswith("new:") or task.lower().startswith("/new "):
+        task = task.split(":", 1)[1].strip() if task.lower().startswith("new:") else task[5:].strip()
+        context.chat_data.pop("task_id", None)
+    else:
+        active = context.chat_data.get("task_id")
+        if active:
+            try:
+                async with httpx.AsyncClient() as client:
+                    s = await client.get(f"{SUPERVISOR_API_BASE_URL}/task/{active}", timeout=HTTP_TIMEOUT)
+                    state = s.json() if s.status_code == 200 else None
+            except Exception:
+                state = None
+            if state and state.get("status") not in ("done", "failed", "abandoned", "cancelled", None):
+                try:
+                    async with httpx.AsyncClient() as client:
+                        r = await client.post(
+                            f"{SUPERVISOR_API_BASE_URL}/task/{active}/note",
+                            json={"note": task},
+                            timeout=HTTP_TIMEOUT,
+                        )
+                        r.raise_for_status()
+                    await update.message.reply_text(
+                        f"Noted — folding into current task {active} on the next loop. "
+                        f"(prefix 'new:' or send /reset to start a fresh task instead)"
+                    )
+                except Exception as e:
+                    await update.message.reply_text(f"Failed to add note: {e}")
+                return ConversationHandler.END
+            else:
+                context.chat_data.pop("task_id", None)
 
     context.chat_data["task_text"] = task
 
@@ -287,21 +331,22 @@ async def _send_completion(context, chat_id: int, task_id: str, state: dict):
     result = state.get("result") or {}
     duration = round(state.get("duration_secs", 0), 1)
     workspace = state.get("workspace", "?")
-    emoji = {"done": "✅", "failed": "❌", "abandoned": "⚠️"}.get(status, "❓")
+    emoji = {"done": "✅", "failed": "❌", "abandoned": "⚠️", "cancelled": "⚪"}.get(status, "❓")
     summary = result.get("summary") or "(no summary)"
+    next_steps = result.get("next_steps") or ""
 
-    text = (
-        f"{emoji} *Task `{task_id}` {status}* in {duration}s\n\n"
-        f"{summary[:1500]}"
-    )
+    text = f"{emoji} Task {task_id} — {status} in {duration:.0f}s\n\n{summary[:1500]}"
+
+    if next_steps:
+        text += f"\n\n— How to use it —\n{next_steps[:2500]}"
 
     if not result.get("success") and result.get("issues"):
         issues_text = "\n".join(f"• {i[:200]}" for i in (result.get("issues") or [])[:3])
-        text += f"\n\n*Issues:*\n{issues_text}"
+        text += f"\n\nIssues:\n{issues_text}"
 
-    text += f"\n\n📁 `{workspace}`"
+    text += f"\n\nWorkspace: {workspace}"
 
-    await context.bot.send_message(chat_id, text, parse_mode="Markdown")
+    await context.bot.send_message(chat_id, text)
 
 
 async def handle_escalation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,7 +386,11 @@ def build_app() -> Application:
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set in env / .env")
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    from pathlib import Path as _P
+    persist_path = _P(__file__).parent / "data" / "telegram_state.pkl"
+    persist_path.parent.mkdir(parents=True, exist_ok=True)
+    persistence = PicklePersistence(filepath=str(persist_path))
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
 
     conv = ConversationHandler(
         entry_points=[
@@ -352,10 +401,13 @@ def build_app() -> Application:
         },
         fallbacks=[CommandHandler("cancel", cmd_cancel_conv)],
         allow_reentry=False,
+        name="cos_main",
+        persistent=True,
     )
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(handle_escalation_callback))
 

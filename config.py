@@ -33,6 +33,10 @@ SUPERVISOR_API_BASE_URL = os.environ.get("SUPERVISOR_API_BASE_URL", "http://loca
 PROJECT_ROOT = Path(__file__).parent.resolve()
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 HOOK_SCRIPT = PROJECT_ROOT / "permission_hook.py"
+STATIC_DIR = PROJECT_ROOT / "static"
+DB_PATH = Path(os.environ.get("CHIEF_DB_PATH", str(PROJECT_ROOT / "data" / "chief.db")))
+CHROMA_PATH = Path(os.environ.get("CHIEF_CHROMA_PATH", str(PROJECT_ROOT / "data" / "chroma")))
+WORKSPACE_TTL_DAYS = int(os.environ.get("WORKSPACE_TTL_DAYS", "30"))
 
 WORKSPACE_ROOT = Path(os.environ.get(
     "SUPERVISOR_WORKSPACE_ROOT",

@@ -1,10 +1,13 @@
-"""In-memory task state. Survives process lifetime, lost on restart.
-V2 will move this to SQLite."""
+"""Task state store. V2.5: persists to SQLite via db.py.
+Also holds in-memory: SSE subscribers, runner registry for cancel, escalation events.
+"""
 import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+
+import db
 
 
 @dataclass
@@ -16,6 +19,8 @@ class TaskState:
     status: str = "pending"
     skill_preview: str = ""
     skill_md: str = ""
+    skill_name: str = ""
+    skill_description: str = ""
     brief: str = ""
     log: list[dict] = field(default_factory=list)
     corrections: list[str] = field(default_factory=list)
@@ -26,6 +31,12 @@ class TaskState:
     finished_at: float | None = None
     escalation_event: asyncio.Event = field(default_factory=asyncio.Event)
     escalation_answer: str | None = None
+    cost_databricks_in: int = 0
+    cost_databricks_out: int = 0
+    cost_claude_usd: float = 0.0
+    keep_workspace: bool = False
+    user_notes: list[str] = field(default_factory=list)
+    claude_plan: list[dict] = field(default_factory=list)
 
     def to_public(self) -> dict:
         return {
@@ -34,26 +45,37 @@ class TaskState:
             "status": self.status,
             "workspace": self.workspace,
             "skill_md": self.skill_md,
+            "skill_name": self.skill_name,
+            "skill_description": self.skill_description,
             "brief": self.brief,
             "log_size": len(self.log),
-            "log_tail": self.log[-20:],
+            "log_tail": self.log[-30:],
+            "claude_plan": self.claude_plan,
             "corrections": self.corrections,
             "escalation": self.escalation,
             "result": self.result,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "duration_secs": (self.finished_at or time.time()) - self.started_at,
+            "cost": {
+                "databricks_input_tokens": self.cost_databricks_in,
+                "databricks_output_tokens": self.cost_databricks_out,
+                "claude_usd": round(self.cost_claude_usd, 4),
+            },
         }
 
 
 class TaskStore:
     def __init__(self):
         self._tasks: dict[str, TaskState] = {}
+        self._subscribers: dict[str, list[asyncio.Queue]] = {}
+        self._runners: dict[str, Any] = {}
 
     def create(self, goal: str, clarifications: dict[str, str], workspace: str) -> TaskState:
         tid = uuid.uuid4().hex[:12]
         state = TaskState(id=tid, goal=goal, clarifications=clarifications, workspace=workspace)
         self._tasks[tid] = state
+        self._persist(state)
         return state
 
     def get(self, tid: str) -> TaskState | None:
@@ -63,31 +85,154 @@ class TaskStore:
         return list(self._tasks.values())
 
     def append_log(self, tid: str, entry: dict):
-        if tid in self._tasks:
-            entry["ts"] = time.time()
-            self._tasks[tid].log.append(entry)
+        if tid not in self._tasks:
+            return
+        entry.setdefault("ts", time.time())
+        self._tasks[tid].log.append(entry)
+        try:
+            db.append_log(tid, entry.get("kind", "?"), entry, entry.get("ts"))
+        except Exception:
+            pass
+        for q in list(self._subscribers.get(tid, [])):
+            try:
+                q.put_nowait(entry)
+            except asyncio.QueueFull:
+                pass
 
     def set_status(self, tid: str, status: str):
-        if tid in self._tasks:
-            self._tasks[tid].status = status
-            if status in ("done", "failed", "abandoned"):
-                self._tasks[tid].finished_at = time.time()
+        if tid not in self._tasks:
+            return
+        self._tasks[tid].status = status
+        if status in ("done", "failed", "abandoned", "cancelled"):
+            self._tasks[tid].finished_at = time.time()
+        self._persist(self._tasks[tid])
+        for q in list(self._subscribers.get(tid, [])):
+            try:
+                q.put_nowait({"kind": "status", "status": status, "ts": time.time()})
+            except asyncio.QueueFull:
+                pass
 
     def set_escalation(self, tid: str, escalation: dict):
-        if tid in self._tasks:
-            self._tasks[tid].escalation = escalation
-            self._tasks[tid].escalation_set_at = time.time()
-            self._tasks[tid].status = "escalated"
-            self._tasks[tid].escalation_event.clear()
-            self._tasks[tid].escalation_answer = None
+        if tid not in self._tasks:
+            return
+        s = self._tasks[tid]
+        s.escalation = escalation
+        s.escalation_set_at = time.time()
+        s.status = "escalated"
+        s.escalation_event.clear()
+        s.escalation_answer = None
+        self._persist(s)
+        for q in list(self._subscribers.get(tid, [])):
+            try:
+                q.put_nowait({"kind": "escalation", "escalation": escalation, "ts": time.time()})
+            except asyncio.QueueFull:
+                pass
 
     def answer_escalation(self, tid: str, answer: str) -> bool:
-        state = self._tasks.get(tid)
-        if not state or state.status != "escalated":
+        s = self._tasks.get(tid)
+        if not s or s.status != "escalated":
             return False
-        state.escalation_answer = answer.lower().strip()
-        state.escalation_event.set()
+        s.escalation_answer = answer.lower().strip()
+        s.escalation_event.set()
         return True
+
+    def add_cost(self, tid: str, in_tokens: int = 0, out_tokens: int = 0, claude_usd: float = 0.0):
+        s = self._tasks.get(tid)
+        if not s:
+            return
+        s.cost_databricks_in += in_tokens
+        s.cost_databricks_out += out_tokens
+        s.cost_claude_usd += claude_usd
+
+    def subscribe(self, tid: str) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=500)
+        self._subscribers.setdefault(tid, []).append(q)
+        s = self._tasks.get(tid)
+        if s:
+            for entry in s.log[-30:]:
+                try:
+                    q.put_nowait(entry)
+                except asyncio.QueueFull:
+                    break
+        return q
+
+    def unsubscribe(self, tid: str, q: asyncio.Queue):
+        subs = self._subscribers.get(tid, [])
+        if q in subs:
+            subs.remove(q)
+
+    def register_runner(self, tid: str, runner):
+        self._runners[tid] = runner
+
+    def unregister_runner(self, tid: str):
+        self._runners.pop(tid, None)
+
+    def cancel(self, tid: str) -> bool:
+        runner = self._runners.get(tid)
+        if not runner:
+            return False
+        try:
+            runner.interrupt()
+        except Exception:
+            pass
+        self.append_log(tid, {"kind": "cancelled", "ts": time.time()})
+        self.set_status(tid, "cancelled")
+        return True
+
+    def _persist(self, state: TaskState):
+        try:
+            db.upsert_task(state)
+        except Exception as e:
+            print(f"[task_store] persist error: {e}")
+
+    def hydrate_from_db(self):
+        """Load recent unfinished tasks from DB so /tasks shows them after restart."""
+        try:
+            rows = db.list_tasks(limit=200)
+        except Exception:
+            return
+        import json as _json
+        for r in rows:
+            if r["id"] in self._tasks:
+                continue
+            full = db.load_task(r["id"])
+            if not full:
+                continue
+            row = full["row"]
+            state = TaskState(
+                id=row["id"],
+                goal=row["goal"] or "",
+                clarifications=_json.loads(row["clarifications"]) if row["clarifications"] else {},
+                workspace=row["workspace"] or "",
+                status=row["status"] or "unknown",
+                skill_md=row["skill_md"] or "",
+                skill_name=row["skill_name"] or "",
+                skill_description=row["skill_description"] or "",
+                brief=row["brief"] or "",
+                result=_json.loads(row["result"]) if row["result"] else None,
+                started_at=row["started_at"] or time.time(),
+                finished_at=row["finished_at"],
+                cost_databricks_in=row["cost_databricks_in"] or 0,
+                cost_databricks_out=row["cost_databricks_out"] or 0,
+                cost_claude_usd=row["cost_claude_usd"] or 0.0,
+                keep_workspace=bool(row["keep_workspace"]),
+            )
+            for l in full["logs"][-100:]:
+                try:
+                    p = _json.loads(l["payload"])
+                    state.log.append(p)
+                except Exception:
+                    pass
+            in_flight = state.status in (
+                "pending", "skilling", "briefing",
+                "executing_loop_1", "executing_loop_2", "executing_loop_3",
+                "reviewing_loop_1", "reviewing_loop_2", "reviewing_loop_3",
+            )
+            if in_flight:
+                # V3: don't auto-abandon. Mark as 'interrupted' and let the user decide
+                # via /task/{id}/resume to attempt a Claude --resume from the captured session_id.
+                state.status = "interrupted"
+            self._tasks[state.id] = state
 
 
 STORE = TaskStore()

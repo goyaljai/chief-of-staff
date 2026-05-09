@@ -17,8 +17,9 @@ from config import (
     LOG_ROOT,
     MAX_CORRECTION_LOOPS,
 )
-from orchestrator import Orchestrator, Reviewer, append_to_global, save_task_skill
+from orchestrator import Orchestrator, Reviewer, append_to_global, save_task_skill, set_usage_callback
 from task_store import STORE, TaskState
+import rag
 
 REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
 
@@ -101,6 +102,50 @@ def _parse_escalation(message: str) -> dict:
     return {"question": message, "option_a": option_a, "option_b": option_b}
 
 
+def _parse_skill_frontmatter(skill_md: str) -> tuple[str, str]:
+    """Parse YAML-ish frontmatter from a SKILL.md. Returns (name, description)."""
+    if not skill_md:
+        return ("", "")
+    lines = skill_md.splitlines()
+    if not lines or not lines[0].strip().startswith("---"):
+        return ("", "")
+    name, desc = "", ""
+    for line in lines[1:30]:
+        s = line.strip()
+        if s.startswith("---"):
+            break
+        if s.lower().startswith("name:"):
+            name = s.split(":", 1)[1].strip()
+        elif s.lower().startswith("description:"):
+            desc = s.split(":", 1)[1].strip()
+    return (name, desc)
+
+
+def _detect_mcp_auth_need(tool_output: str) -> dict | None:
+    """If a tool result indicates MCP needs OAuth/auth, extract the URL and return info.
+    V3 hotfix: tightened to require BOTH a clear MCP-auth phrase AND an OAuth-shaped URL.
+    Avoids false positives on workspace-internal URLs like http://10.0.2.2:5050/api/hello."""
+    if not tool_output:
+        return None
+    low = tool_output.lower()
+    strong_signals = (
+        "open this url in their browser to authorize",
+        "open this url in your browser to authorize",
+        "ask the user to open this url",
+        "complete the oauth flow",
+        "authorize the plugin",
+        "to authenticate this mcp server",
+        "client_id=mcp_",
+    )
+    if not any(s in low for s in strong_signals):
+        return None
+    import re as _re
+    url_match = _re.search(r"https?://[^\s\"']*(?:oauth|auth|authorize|authenticate)[^\s\"']*", tool_output, _re.IGNORECASE)
+    if not url_match:
+        return None
+    return {"url": url_match.group(0), "snippet": tool_output[:400]}
+
+
 def _read_hook_log(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -121,23 +166,64 @@ class SupervisorLoop:
         self.runner = ClaudeRunner(working_dir=self.workspace, hook_log_path=self.hook_log)
         self._action_count = 0
         self._review_pending: dict | None = None
+        self._mcp_auth_requested: dict | None = None
+        STORE.register_runner(task.id, self.runner)
+        set_usage_callback(self._on_databricks_usage)
+
+    def _on_databricks_usage(self, in_tokens: int, out_tokens: int):
+        STORE.add_cost(self.task.id, in_tokens=in_tokens, out_tokens=out_tokens)
+
+    def _should_nudge(self) -> bool:
+        """Trigger a manager nudge only when: (a) >20 actions logged without a verification op,
+        or (b) elapsed time on this task > 5 minutes."""
+        actions = sum(1 for e in self.task.log if e.get("kind") == "tool_use")
+        verify_kw = ("gradlew", "gradle", "pytest", "test ", "jest", "build", "assemble", "verify", "check", "lint")
+        has_verify = any(
+            (e.get("kind") == "tool_use") and any(k in (json.dumps(e.get("input") or {}).lower()) for k in verify_kw)
+            for e in self.task.log
+        )
+        elapsed = time.time() - self.task.started_at
+        return (actions > 20 and not has_verify) or elapsed > 300
 
     async def run(self):
         STORE.set_status(self.task.id, "skilling")
         STORE.append_log(self.task.id, {"kind": "phase", "phase": "generate_skill"})
 
         try:
+            library_match = None
+            try:
+                library_match = rag.find_matching_skill(
+                    self.task.goal + " " + (getattr(self.task, "skill_preview", "") or "")[:500],
+                    distance_max=0.30,
+                )
+            except Exception as e:
+                STORE.append_log(self.task.id, {"kind": "library_lookup_error", "msg": str(e)})
+
+            if library_match:
+                STORE.append_log(self.task.id, {
+                    "kind": "library_match",
+                    "matched_task_id": library_match.get("task_id"),
+                    "distance": library_match.get("distance"),
+                })
+
             skill_md = self.orchestrator.generate_skill_brief(
                 self.task.goal,
                 self.task.clarifications,
                 skill_preview=getattr(self.task, "skill_preview", "") or "",
+                library_match=library_match,
             )
             save_task_skill(str(self.workspace), skill_md)
             self.task.skill_md = skill_md
+            name, desc = _parse_skill_frontmatter(skill_md)
+            self.task.skill_name = name
+            self.task.skill_description = desc
             STORE.append_log(self.task.id, {
                 "kind": "skill_generated",
                 "preview": skill_md[:300],
                 "refined_from_preview": bool(getattr(self.task, "skill_preview", "")),
+                "library_match": bool(library_match),
+                "skill_name": name,
+                "skill_description": desc[:200],
             })
         except Exception as e:
             STORE.append_log(self.task.id, {"kind": "error", "where": "generate_skill", "msg": str(e)})
@@ -150,7 +236,8 @@ class SupervisorLoop:
 
         try:
             self.task.brief = self.orchestrator.build_brief(
-                self.task.goal, self.task.clarifications, str(self.workspace)
+                self.task.goal, self.task.clarifications, str(self.workspace),
+                inline_skill=self.task.skill_md or "",
             )
         except Exception as e:
             STORE.append_log(self.task.id, {"kind": "error", "where": "build_brief", "msg": str(e)})
@@ -181,6 +268,9 @@ class SupervisorLoop:
 
             session_id = result.session_id
 
+            if result.cost_usd:
+                STORE.add_cost(self.task.id, claude_usd=float(result.cost_usd))
+
             for entry in _read_hook_log(self.hook_log):
                 STORE.append_log(self.task.id, {"kind": "hook", **entry})
             try:
@@ -206,6 +296,7 @@ class SupervisorLoop:
                 goal=self.task.goal,
                 action_log=combined,
                 workspace=str(self.workspace),
+                inline_skill="",
             )
             STORE.append_log(self.task.id, {
                 "kind": "final_review",
@@ -217,9 +308,12 @@ class SupervisorLoop:
             if review["passed"]:
                 STORE.set_status(self.task.id, "done")
                 self._write_learning(loop_num, review)
+                self._index_in_rag(review)
+                STORE.unregister_runner(self.task.id)
                 self.task.result = {
                     "success": True,
                     "summary": review["summary"],
+                    "next_steps": review.get("next_steps", ""),
                     "loops": loop_num,
                     "corrections_made": len(self.task.corrections),
                     "workspace": str(self.workspace),
@@ -229,9 +323,16 @@ class SupervisorLoop:
             self.task.corrections.extend(review["issues"])
             STORE.append_log(self.task.id, {"kind": "correction", "issues": review["issues"]})
 
+            user_notes = list(self.task.user_notes)
+            if user_notes:
+                self.task.user_notes.clear()
+                STORE.append_log(self.task.id, {"kind": "notes_consumed", "notes": user_notes})
+
             if loop_num == MAX_CORRECTION_LOOPS:
                 STORE.set_status(self.task.id, "failed")
                 self._write_learning(loop_num, review)
+                self._index_in_rag(review)
+                STORE.unregister_runner(self.task.id)
                 self.task.result = {
                     "success": False,
                     "best_effort": True,
@@ -242,7 +343,25 @@ class SupervisorLoop:
                 }
                 return
 
-            prompt = self.orchestrator.build_correction_prompt(self.task.brief, review["issues"])
+            grounding = ""
+            if self._should_nudge():
+                try:
+                    grounding = self.orchestrator.generate_grounding_nudge(
+                        task=self.task.goal,
+                        brief=self.task.brief,
+                        action_log_summary=_summarize_log(self.task.log, limit=60),
+                        loop_num=loop_num,
+                    )
+                    if grounding:
+                        STORE.append_log(self.task.id, {"kind": "grounding_nudge", "nudge": grounding})
+                except Exception as e:
+                    STORE.append_log(self.task.id, {"kind": "grounding_error", "msg": str(e)})
+
+            prompt = self.orchestrator.build_correction_prompt(
+                self.task.brief, review["issues"],
+                user_notes=user_notes,
+                grounding_nudge=grounding,
+            )
 
     def _on_event(self, event: ClaudeEvent):
         if event.type == "init":
@@ -261,6 +380,15 @@ class SupervisorLoop:
                 "input": event.tool_input,
             })
 
+            if event.tool_name == "TodoWrite":
+                todos = (event.tool_input or {}).get("todos") or []
+                if todos:
+                    self.task.claude_plan = todos
+                    STORE.append_log(self.task.id, {
+                        "kind": "plan_updated",
+                        "items": [{"content": t.get("content",""), "status": t.get("status","")} for t in todos],
+                    })
+
             if event.tool_name in REVIEW_TOOLS or _is_reviewable_mcp_tool(event.tool_name or ""):
                 try:
                     review = self.reviewer.review_action(
@@ -269,6 +397,7 @@ class SupervisorLoop:
                         tool_input=event.tool_input,
                         recent_actions=_summarize_log(self.task.log, limit=20),
                         workspace=str(self.workspace),
+                        inline_skill="",
                     )
                 except Exception as e:
                     review = {"decision": "approve", "message": f"review failed: {e}"}
@@ -286,6 +415,8 @@ class SupervisorLoop:
                     self.runner.interrupt()
                 elif review["decision"] == "correct":
                     self.task.corrections.append(review["message"])
+                elif review["decision"] == "request_evidence":
+                    self.task.corrections.append(f"[evidence-needed] {review['message']}")
             return
 
         if event.type == "tool_result":
@@ -294,6 +425,19 @@ class SupervisorLoop:
                 "output": event.tool_output or "",
                 "is_error": event.is_error,
             })
+            mcp_auth = _detect_mcp_auth_need(event.tool_output or "")
+            if mcp_auth and not self._mcp_auth_requested:
+                self._mcp_auth_requested = mcp_auth
+                STORE.set_escalation(self.task.id, {
+                    "question": (
+                        f"Claude needs to authenticate an MCP tool to continue. "
+                        f"Open this URL to authorize:\n\n{mcp_auth['url']}\n\n"
+                        f"After authorizing, reply A. To skip the MCP and have Claude use built-in knowledge instead, reply B."
+                    ),
+                    "option_a": f"I authorized — please retry the MCP call",
+                    "option_b": f"Skip the MCP, use built-in knowledge / fallback approach",
+                })
+                self.runner.interrupt()
             return
 
         if event.type == "result":
@@ -333,6 +477,26 @@ class SupervisorLoop:
                 "via": "auto_orchestrator",
             })
             return True
+
+    def _index_in_rag(self, review: dict):
+        try:
+            summary = review.get("summary", "") or ""
+            rag.index_task(
+                task_id=self.task.id,
+                goal=self.task.goal,
+                summary=summary,
+                skill_md=self.task.skill_md or "",
+            )
+            if self.task.skill_description:
+                rag.index_skill(
+                    task_id=self.task.id,
+                    name=self.task.skill_name,
+                    description=self.task.skill_description,
+                    skill_md=self.task.skill_md or "",
+                )
+            STORE.append_log(self.task.id, {"kind": "rag_indexed"})
+        except Exception as e:
+            STORE.append_log(self.task.id, {"kind": "rag_index_error", "msg": str(e)})
 
     def _write_learning(self, loop_num: int, review: dict):
         try:

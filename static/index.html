@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>chief-of-staff</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .stream-line { white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+
+<header class="bg-white border-b border-slate-200">
+  <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-6">
+      <h1 class="text-lg font-semibold tracking-tight">chief-of-staff</h1>
+      <nav class="flex gap-1">
+        <button id="nav-dashboard" class="px-3 py-1.5 rounded text-sm font-medium bg-slate-900 text-white">Dashboard</button>
+        <button id="nav-ask" class="px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-100">Ask</button>
+      </nav>
+    </div>
+    <a id="health" class="text-xs text-slate-500 mono">…</a>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 py-6">
+
+  <!-- DASHBOARD -->
+  <section id="dashboard">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-base font-semibold">Tasks</h2>
+      <div class="flex gap-2">
+        <button id="new-task-btn" class="bg-slate-900 text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-800">+ New task</button>
+        <button id="refresh" class="text-sm text-slate-600 hover:text-slate-900 px-3 py-1.5">↻ Refresh</button>
+      </div>
+    </div>
+
+    <div id="stats-bar" class="grid grid-cols-4 gap-3 mb-4"></div>
+
+    <div class="flex items-center gap-2 mb-3">
+      <div id="filter-chips" class="flex gap-1.5"></div>
+      <input id="task-search" type="text" placeholder="Search tasks..."
+        class="flex-1 border border-slate-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-slate-900" />
+    </div>
+
+    <div id="task-list" class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div class="p-4 text-sm text-slate-500">Loading…</div>
+    </div>
+  </section>
+
+  <!-- NEW TASK MODAL -->
+  <div id="new-task-modal" class="hidden fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg max-w-2xl w-full p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h3 id="modal-title" class="text-lg font-semibold">New task</h3>
+        <button id="modal-close" class="text-slate-500 hover:text-slate-900 text-xl">×</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- TASK DETAIL -->
+  <section id="detail" class="hidden">
+    <button id="back-to-list" class="text-sm text-slate-600 hover:text-slate-900 mb-3">← Back</button>
+    <div id="detail-body"></div>
+  </section>
+
+  <!-- ASK -->
+  <section id="ask" class="hidden">
+    <h2 class="text-base font-semibold mb-3">Ask anything about your past work</h2>
+    <div class="bg-white border border-slate-200 rounded-lg p-4 mb-4">
+      <input id="ask-input" type="text"
+        class="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-900"
+        placeholder="e.g. where is the mango list? what did we recommend in BTM?"
+        autocomplete="off" />
+      <div class="flex justify-between items-center mt-2">
+        <span class="text-xs text-slate-500">Searches FTS5 (keyword) + ChromaDB (semantic) over your task history.</span>
+        <button id="ask-submit" class="bg-slate-900 text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-800">Ask</button>
+      </div>
+    </div>
+    <div id="ask-result"></div>
+  </section>
+
+</main>
+
+<script>
+const API = "";
+
+const $ = (id) => document.getElementById(id);
+
+function pill(status) {
+  const colors = {
+    "done": "bg-emerald-100 text-emerald-800",
+    "failed": "bg-rose-100 text-rose-800",
+    "abandoned": "bg-amber-100 text-amber-800",
+    "cancelled": "bg-slate-200 text-slate-700",
+    "escalated": "bg-purple-100 text-purple-800",
+  };
+  const cls = colors[status] || (status?.startsWith("executing") ? "bg-blue-100 text-blue-800" :
+                                  status?.startsWith("reviewing") ? "bg-indigo-100 text-indigo-800" :
+                                  "bg-slate-100 text-slate-700");
+  return `<span class="pill ${cls}">${status || "?"}</span>`;
+}
+
+function fmtDuration(secs) {
+  if (!secs && secs !== 0) return "—";
+  if (secs < 60) return `${secs.toFixed(0)}s`;
+  if (secs < 3600) return `${(secs/60).toFixed(1)}m`;
+  return `${(secs/3600).toFixed(1)}h`;
+}
+
+function fmtTimeAgo(ts) {
+  if (!ts) return "—";
+  const diff = (Date.now()/1000) - ts;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+let _filterStatus = "all";
+let _searchText = "";
+
+function statusBucket(s) {
+  if (s === "done") return "done";
+  if (s === "failed" || s === "abandoned" || s === "cancelled") return "failed";
+  if (s === "escalated") return "escalated";
+  return "running";
+}
+
+function applyFilters(tasks) {
+  return tasks.filter(t => {
+    if (_filterStatus !== "all" && statusBucket(t.status) !== _filterStatus) return false;
+    if (_searchText && !(t.goal||"").toLowerCase().includes(_searchText.toLowerCase()) && !t.id.includes(_searchText)) return false;
+    return true;
+  });
+}
+
+function renderStats(tasks) {
+  const total = tasks.length;
+  const done = tasks.filter(t => t.status === "done").length;
+  const running = tasks.filter(t => statusBucket(t.status) === "running" || t.status === "escalated").length;
+  const totalTok = tasks.reduce((s, t) => s + ((t.cost?.databricks_input_tokens||0) + (t.cost?.databricks_output_tokens||0)), 0);
+  const passRate = total ? Math.round(done * 100 / total) : 0;
+
+  $("stats-bar").innerHTML = `
+    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Total tasks</div><div class="text-2xl font-semibold">${total}</div></div>
+    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Done</div><div class="text-2xl font-semibold text-emerald-700">${done} <span class="text-sm text-slate-500 font-normal">(${passRate}%)</span></div></div>
+    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Running / escalated</div><div class="text-2xl font-semibold text-blue-700">${running}</div></div>
+    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Tokens used</div><div class="text-2xl font-semibold mono">${totalTok.toLocaleString()}</div></div>
+  `;
+}
+
+function renderFilterChips(tasks) {
+  const counts = {
+    all: tasks.length,
+    running: tasks.filter(t => statusBucket(t.status) === "running" || t.status === "escalated").length,
+    done: tasks.filter(t => t.status === "done").length,
+    failed: tasks.filter(t => statusBucket(t.status) === "failed").length,
+  };
+  const chips = ["all","running","done","failed"];
+  $("filter-chips").innerHTML = chips.map(c => {
+    const active = c === _filterStatus;
+    return `<button data-filter="${c}" class="px-3 py-1.5 text-xs rounded font-medium ${active ? "bg-slate-900 text-white" : "bg-white border border-slate-200 hover:bg-slate-50 text-slate-700"}">
+      ${c[0].toUpperCase()+c.slice(1)} <span class="opacity-60 ml-1">${counts[c]}</span>
+    </button>`;
+  }).join("");
+  document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => {
+    _filterStatus = b.dataset.filter;
+    loadTasks();
+  }));
+}
+
+function fmtCost(cost) {
+  if (!cost) return "—";
+  const tin = cost.databricks_input_tokens || 0;
+  const tout = cost.databricks_output_tokens || 0;
+  const usd = cost.claude_usd || 0;
+  const t = tin + tout;
+  return `${t.toLocaleString()} tok · $${usd.toFixed(2)}`;
+}
+
+async function loadTasks() {
+  const list = $("task-list");
+  try {
+    const r = await fetch(`${API}/tasks`);
+    const tasks = await r.json();
+    tasks.sort((a,b) => (b.started_at||0) - (a.started_at||0));
+    renderStats(tasks);
+    renderFilterChips(tasks);
+
+    const filtered = applyFilters(tasks);
+
+    if (!filtered.length) {
+      list.innerHTML = `<div class="p-6 text-sm text-slate-500 text-center">${tasks.length ? 'No tasks match the filter.' : 'No tasks yet. Click + New task above to start.'}</div>`;
+      return;
+    }
+    list.innerHTML = `
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider">
+          <tr>
+            <th class="text-left px-4 py-2">Task</th>
+            <th class="text-left px-4 py-2 w-32">Status</th>
+            <th class="text-left px-4 py-2 w-24">Duration</th>
+            <th class="text-left px-4 py-2 w-28">Tokens</th>
+            <th class="text-left px-4 py-2 w-24">Started</th>
+            <th class="text-right px-4 py-2 w-20"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.map(t => {
+            const tin = t.cost?.databricks_input_tokens || 0;
+            const tout = t.cost?.databricks_output_tokens || 0;
+            const tok = (tin+tout).toLocaleString();
+            const isRunning = ["pending","skilling","briefing"].includes(t.status) || t.status?.startsWith("executing") || t.status?.startsWith("reviewing");
+            return `
+            <tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer task-row" data-id="${t.id}">
+              <td class="px-4 py-3">
+                <div class="font-medium truncate max-w-lg" title="${(t.goal||'').replace(/"/g,'&quot;')}">${t.goal||'(no goal)'}</div>
+                <div class="text-xs text-slate-500 mono">${t.id}</div>
+              </td>
+              <td class="px-4 py-3">${pill(t.status)}</td>
+              <td class="px-4 py-3 text-slate-600">${fmtDuration(t.duration_secs)}</td>
+              <td class="px-4 py-3 text-slate-600 mono text-xs">${tok}</td>
+              <td class="px-4 py-3 text-slate-500 text-xs">${fmtTimeAgo(t.started_at)}</td>
+              <td class="px-4 py-3 text-right">
+                ${isRunning ? `<button class="row-cancel text-xs px-2 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded" data-id="${t.id}">Cancel</button>` : ''}
+              </td>
+            </tr>
+          `;}).join("")}
+        </tbody>
+      </table>`;
+    document.querySelectorAll(".task-row").forEach(r => {
+      r.addEventListener("click", () => showDetail(r.dataset.id));
+    });
+    document.querySelectorAll(".row-cancel").forEach(b => {
+      b.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Cancel task ${b.dataset.id}?`)) return;
+        await fetch(`${API}/task/${b.dataset.id}/cancel`, {method:"POST"});
+        loadTasks();
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<div class="p-4 text-sm text-rose-600">Error: ${e}</div>`;
+  }
+}
+
+// New-task flow: 2-step modal — get questions, answer them, submit
+function openNewTaskModal() {
+  $("new-task-modal").classList.remove("hidden");
+  $("modal-title").textContent = "New task";
+  $("modal-body").innerHTML = `
+    <div>
+      <label class="text-sm font-medium block mb-1">What do you want done?</label>
+      <textarea id="new-task-goal" rows="3" class="w-full border border-slate-300 rounded p-2 text-sm focus:outline-none focus:border-slate-900"
+        placeholder="e.g. build a hello world android app in kotlin"></textarea>
+      <div class="flex gap-2 mt-3 justify-end">
+        <button id="modal-cancel" class="text-sm px-3 py-1.5 text-slate-600 hover:text-slate-900">Cancel</button>
+        <button id="modal-next" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">Next →</button>
+      </div>
+    </div>`;
+  $("modal-cancel").addEventListener("click", () => $("new-task-modal").classList.add("hidden"));
+  $("modal-next").addEventListener("click", askQuestionsForNewTask);
+}
+
+async function askQuestionsForNewTask() {
+  const task = $("new-task-goal").value.trim();
+  if (!task) return;
+  $("modal-body").innerHTML = `<div class="text-sm text-slate-500">🤔 Thinking about clarifying questions...</div>`;
+  try {
+    const r = await fetch(`${API}/task/questions`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task}),
+    });
+    const data = await r.json();
+    const qs = data.questions || [];
+    if (!qs.length) {
+      submitNewTask(task, {});
+      return;
+    }
+    $("modal-body").innerHTML = `
+      <div>
+        <div class="text-sm text-slate-600 mb-3">Task: <span class="font-medium">${task}</span></div>
+        <div class="space-y-3 max-h-96 overflow-y-auto">
+          ${qs.map((q,i) => `
+            <div>
+              <label class="text-sm font-medium block mb-1">Q${i+1}: ${q}</label>
+              <input data-q="${q.replace(/"/g,'&quot;')}" type="text" class="answer-input w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-slate-900" />
+            </div>
+          `).join("")}
+        </div>
+        <div class="flex gap-2 mt-4 justify-end">
+          <button id="modal-cancel" class="text-sm px-3 py-1.5 text-slate-600 hover:text-slate-900">Cancel</button>
+          <button id="modal-submit" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">Start task</button>
+        </div>
+      </div>`;
+    $("modal-cancel").addEventListener("click", () => $("new-task-modal").classList.add("hidden"));
+    $("modal-submit").addEventListener("click", () => {
+      const answers = {};
+      document.querySelectorAll(".answer-input").forEach(inp => {
+        if (inp.value.trim()) answers[inp.dataset.q] = inp.value.trim();
+      });
+      submitNewTask(task, answers);
+    });
+  } catch (e) {
+    $("modal-body").innerHTML = `<div class="text-sm text-rose-600">Error: ${e}</div>`;
+  }
+}
+
+async function submitNewTask(task, clarifications) {
+  $("modal-body").innerHTML = `<div class="text-sm text-slate-500">Starting task...</div>`;
+  try {
+    const r = await fetch(`${API}/task/run`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task, clarifications}),
+    });
+    const data = await r.json();
+    $("new-task-modal").classList.add("hidden");
+    showDetail(data.task_id);
+  } catch (e) {
+    $("modal-body").innerHTML = `<div class="text-sm text-rose-600">Error: ${e}</div>`;
+  }
+}
+
+let _activeStream = null;
+
+async function showDetail(id) {
+  $("dashboard").classList.add("hidden");
+  $("ask").classList.add("hidden");
+  $("detail").classList.remove("hidden");
+  if (_activeStream) { _activeStream.close(); _activeStream = null; }
+
+  const body = $("detail-body");
+  body.innerHTML = `<div class="text-sm text-slate-500">Loading ${id}…</div>`;
+  let state;
+  try {
+    const r = await fetch(`${API}/task/${id}`);
+    state = await r.json();
+  } catch (e) {
+    body.innerHTML = `<div class="text-rose-600">Error: ${e}</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="bg-white border border-slate-200 rounded-lg p-5 mb-4">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex-1">
+          <h2 class="text-lg font-semibold mb-1">${state.goal||'(no goal)'}</h2>
+          <div class="text-xs text-slate-500 mono">${state.id} · ${state.workspace||''}</div>
+        </div>
+        <div class="flex items-center gap-2">
+          ${pill(state.status)}
+          ${["pending","skilling","briefing"].includes(state.status) || state.status?.startsWith("executing") || state.status?.startsWith("reviewing")
+            ? `<button id="cancel-btn" class="text-xs px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded font-medium">Cancel</button>`
+            : ""}
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-4 text-sm border-t pt-3">
+        <div><div class="text-xs text-slate-500">Duration</div><div class="font-medium">${fmtDuration(state.duration_secs)}</div></div>
+        <div><div class="text-xs text-slate-500">Cost</div><div class="font-medium mono text-xs">${fmtCost(state.cost)}</div></div>
+        <div><div class="text-xs text-slate-500">Log entries</div><div class="font-medium">${state.log_size||0}</div></div>
+      </div>
+    </div>
+
+    ${state.escalation ? `
+      <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
+        <div class="text-xs font-semibold text-purple-700 mb-2">ESCALATION — needs your decision</div>
+        <div class="text-sm whitespace-pre-wrap">${state.escalation.question||''}</div>
+        <div class="flex gap-2 mt-3">
+          <button class="esc-btn px-3 py-1.5 bg-white border border-purple-300 rounded text-sm hover:bg-purple-100" data-answer="a">A) ${state.escalation.option_a||''}</button>
+          <button class="esc-btn px-3 py-1.5 bg-white border border-purple-300 rounded text-sm hover:bg-purple-100" data-answer="b">B) ${state.escalation.option_b||''}</button>
+        </div>
+      </div>` : ""}
+
+    ${state.result || state.artifacts?.length || state.final_output ? `
+      <div class="bg-white border border-slate-200 rounded-lg p-4 mb-4">
+        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Output</div>
+
+        ${state.result?.summary ? `
+          <div class="mb-3 text-sm whitespace-pre-wrap text-slate-800">${state.result.summary}</div>` : ""}
+
+        ${state.result?.next_steps ? `
+          <div class="mb-3 bg-emerald-50 border border-emerald-200 rounded p-3">
+            <div class="text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-1.5">How to use this</div>
+            <pre class="text-sm whitespace-pre-wrap mono text-slate-800">${state.result.next_steps.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</pre>
+          </div>` : ""}
+
+        ${state.artifacts && state.artifacts.length ? `
+          <div class="mb-3">
+            <div class="text-xs font-semibold text-slate-600 mb-2">Files produced (${state.artifacts.length})</div>
+            <div class="space-y-2">
+              ${state.artifacts.slice(0, 5).map(a => `
+                <details class="border border-slate-200 rounded">
+                  <summary class="cursor-pointer px-3 py-2 text-xs mono hover:bg-slate-50 flex items-center justify-between">
+                    <span>📄 ${a.path}</span>
+                    <span class="text-slate-400">${a.size_bytes}B</span>
+                  </summary>
+                  <div class="px-3 pb-2 text-xs text-slate-500 mono break-all">${a.abs_path}</div>
+                  <pre class="px-3 pb-3 text-xs mono whitespace-pre-wrap bg-slate-50 m-2 p-2 rounded max-h-96 overflow-y-auto">${(a.preview||'(empty)').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</pre>
+                </details>`).join("")}
+              ${state.artifacts.length > 5 ? `<div class="text-xs text-slate-500">+${state.artifacts.length - 5} more files in workspace</div>` : ""}
+            </div>
+          </div>` : ""}
+
+        ${!state.artifacts?.length && state.final_output ? `
+          <div class="mb-3">
+            <div class="text-xs font-semibold text-slate-600 mb-2">Claude's output (no file artifact was produced)</div>
+            <pre class="text-sm mono whitespace-pre-wrap bg-slate-50 p-3 rounded max-h-96 overflow-y-auto">${(state.final_output||'').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</pre>
+          </div>` : ""}
+
+        ${state.result?.issues && state.result.issues.length ? `
+          <div class="mt-3"><div class="text-xs font-semibold text-rose-600 mb-1">Issues:</div>
+            <ul class="list-disc list-inside text-sm space-y-1">
+              ${state.result.issues.map(i => `<li>${i}</li>`).join("")}
+            </ul></div>` : ""}
+      </div>` : ""}
+
+    ${state.claude_plan && state.claude_plan.length ? `
+      <div class="bg-white border border-slate-200 rounded-lg p-4 mb-4">
+        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Claude's plan (live)</div>
+        <ul class="text-sm space-y-1">
+          ${state.claude_plan.map(t => {
+            const s = t.status || "pending";
+            const icon = s === "completed" ? "☑" : s === "in_progress" ? "▶" : "☐";
+            const cls = s === "completed" ? "text-emerald-700 line-through" : s === "in_progress" ? "text-blue-700 font-medium" : "text-slate-700";
+            return `<li class="${cls}">${icon} ${t.content || ""}</li>`;
+          }).join("")}
+        </ul>
+        <div class="text-xs text-slate-400 mt-2">Note: this is Claude's own bookkeeping, not proof of work. Only artifacts and verification count.</div>
+      </div>` : ""}
+
+    <div class="bg-white border border-slate-200 rounded-lg p-4 mb-4">
+      <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Ask about this task</div>
+      <div class="flex gap-2">
+        <input id="task-ask-input" type="text" class="flex-1 border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-slate-900"
+          placeholder="e.g. what files were created? what did Claude actually output?" autocomplete="off" />
+        <button id="task-ask-btn" class="bg-slate-900 text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-800">Ask</button>
+      </div>
+      <div id="task-ask-result" class="mt-3"></div>
+    </div>
+
+    ${["done","failed","abandoned","cancelled"].includes(state.status) ? "" : `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Live event stream</div>
+      <div id="event-stream" class="text-xs mono space-y-1 max-h-[500px] overflow-y-auto">
+        ${(state.log_tail||[]).map(e => `<div class="stream-line text-slate-700">[${e.kind}] ${(e.text||e.tool||e.message||e.lessons||"") + (typeof e.input === "object" ? " "+JSON.stringify(e.input).slice(0,160) : "")}</div>`).join("")}
+      </div>
+    </div>`}`;
+
+  // Task-specific ask
+  const taskAskBtn = $("task-ask-btn");
+  if (taskAskBtn) {
+    const submitTaskAsk = async () => {
+      const input = $("task-ask-input");
+      const q = input.value.trim();
+      if (!q) return;
+      const res = $("task-ask-result");
+      res.innerHTML = `<div class="text-sm text-slate-500">Thinking…</div>`;
+      try {
+        const r = await fetch(`${API}/task/${id}/ask`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({question: q}),
+        });
+        const j = await r.json();
+        res.innerHTML = `
+          <div class="bg-slate-50 border border-slate-200 rounded p-3">
+            <div class="text-sm whitespace-pre-wrap">${(j.answer || '').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>
+            ${j.cited_files && j.cited_files.length ? `<div class="text-xs text-slate-500 mt-2">Cited: ${j.cited_files.join(', ')}</div>` : ""}
+          </div>`;
+      } catch (e) {
+        res.innerHTML = `<div class="text-rose-600 text-sm">Error: ${e}</div>`;
+      }
+    };
+    taskAskBtn.addEventListener("click", submitTaskAsk);
+    $("task-ask-input").addEventListener("keypress", (e) => { if (e.key === "Enter") submitTaskAsk(); });
+  }
+
+  // Cancel
+  const cancelBtn = $("cancel-btn");
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", async () => {
+      if (!confirm("Cancel this running task?")) return;
+      const r = await fetch(`${API}/task/${id}/cancel`, {method: "POST"});
+      const j = await r.json();
+      alert(JSON.stringify(j));
+      showDetail(id);
+    });
+  }
+
+  // Escalation buttons
+  document.querySelectorAll(".esc-btn").forEach(b => {
+    b.addEventListener("click", async () => {
+      const r = await fetch(`${API}/task/${id}/escalation`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({answer: b.dataset.answer}),
+      });
+      const j = await r.json();
+      alert(JSON.stringify(j));
+      showDetail(id);
+    });
+  });
+
+  // SSE live tail
+  const stream = $("event-stream");
+  if (state.status && !["done","failed","abandoned","cancelled"].includes(state.status)) {
+    const es = new EventSource(`${API}/task/${id}/stream`);
+    _activeStream = es;
+    es.addEventListener("log", (e) => {
+      try {
+        const entry = JSON.parse(e.data);
+        const div = document.createElement("div");
+        div.className = "stream-line text-slate-700";
+        const summary = entry.text || entry.tool || entry.message || entry.lessons || (entry.input ? JSON.stringify(entry.input).slice(0,160) : "");
+        div.textContent = `[${entry.kind}] ${summary||""}`;
+        stream.appendChild(div);
+        stream.scrollTop = stream.scrollHeight;
+      } catch {}
+    });
+    es.addEventListener("terminal", (e) => {
+      es.close();
+      _activeStream = null;
+      setTimeout(() => showDetail(id), 500);
+    });
+    es.onerror = () => { es.close(); _activeStream = null; };
+  }
+}
+
+$("back-to-list").addEventListener("click", () => {
+  if (_activeStream) { _activeStream.close(); _activeStream = null; }
+  $("detail").classList.add("hidden");
+  $("ask").classList.add("hidden");
+  $("dashboard").classList.remove("hidden");
+  loadTasks();
+});
+
+$("nav-dashboard").addEventListener("click", () => {
+  if (_activeStream) { _activeStream.close(); _activeStream = null; }
+  $("detail").classList.add("hidden");
+  $("ask").classList.add("hidden");
+  $("dashboard").classList.remove("hidden");
+  $("nav-dashboard").className = "px-3 py-1.5 rounded text-sm font-medium bg-slate-900 text-white";
+  $("nav-ask").className = "px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-100";
+  loadTasks();
+});
+
+$("nav-ask").addEventListener("click", () => {
+  if (_activeStream) { _activeStream.close(); _activeStream = null; }
+  $("detail").classList.add("hidden");
+  $("dashboard").classList.add("hidden");
+  $("ask").classList.remove("hidden");
+  $("nav-ask").className = "px-3 py-1.5 rounded text-sm font-medium bg-slate-900 text-white";
+  $("nav-dashboard").className = "px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-100";
+  $("ask-input").focus();
+});
+
+$("refresh").addEventListener("click", loadTasks);
+$("new-task-btn").addEventListener("click", openNewTaskModal);
+$("modal-close").addEventListener("click", () => $("new-task-modal").classList.add("hidden"));
+$("task-search").addEventListener("input", (e) => { _searchText = e.target.value; loadTasks(); });
+setInterval(() => { if (!$("dashboard").classList.contains("hidden")) loadTasks(); }, 8000);
+
+async function submitAsk() {
+  const q = $("ask-input").value.trim();
+  if (!q) return;
+  const result = $("ask-result");
+  result.innerHTML = `<div class="text-sm text-slate-500">Searching history…</div>`;
+  try {
+    const r = await fetch(`${API}/ask`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question: q}),
+    });
+    const j = await r.json();
+    result.innerHTML = `
+      <div class="bg-white border border-slate-200 rounded-lg p-5 mb-3">
+        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Answer</div>
+        <div class="text-sm whitespace-pre-wrap">${j.answer||""}</div>
+        ${j.cited_task_ids && j.cited_task_ids.length ? `
+          <div class="mt-3 text-xs text-slate-500">
+            Cited: ${j.cited_task_ids.map(t => `<a class="text-blue-600 hover:underline mono cursor-pointer cite" data-id="${t}">${t}</a>`).join(", ")}
+          </div>` : ""}
+      </div>
+      ${j.retrieved && j.retrieved.length ? `
+        <div class="bg-white border border-slate-200 rounded-lg p-4">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Retrieved sources</div>
+          <ul class="space-y-2 text-sm">
+            ${j.retrieved.map(s => `
+              <li>
+                <a class="text-blue-600 hover:underline mono cite cursor-pointer" data-id="${s.task_id}">${s.task_id}</a>
+                · <span class="text-slate-500 text-xs">${s.via||""}</span>
+                <div class="text-xs text-slate-700 mt-0.5">${s.goal||''}</div>
+                <div class="text-xs text-slate-500 mt-0.5">${(s.snip||'').replace(/[<>]/g,'')}</div>
+              </li>`).join("")}
+          </ul>
+        </div>` : ""}`;
+    document.querySelectorAll(".cite").forEach(c => c.addEventListener("click", () => showDetail(c.dataset.id)));
+  } catch (e) {
+    result.innerHTML = `<div class="text-rose-600">Error: ${e}</div>`;
+  }
+}
+
+$("ask-submit").addEventListener("click", submitAsk);
+$("ask-input").addEventListener("keypress", (e) => { if (e.key === "Enter") submitAsk(); });
+
+(async () => {
+  try {
+    const r = await fetch(`${API}/health`);
+    const j = await r.json();
+    $("health").textContent = `v${j.version||"?"} · ${j.tasks_in_memory||0} tasks loaded`;
+  } catch {
+    $("health").textContent = "offline";
+    $("health").classList.add("text-rose-600");
+  }
+  loadTasks();
+})();
+</script>
+
+</body>
+</html>

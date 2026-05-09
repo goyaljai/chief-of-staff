@@ -31,14 +31,15 @@ Given a single tool call (and optionally its output), decide if it serves the go
 
 Output format:
 ```json
-{"decision": "approve|correct|escalate", "message": "..."}
+{"decision": "approve|correct|request_evidence|escalate", "message": "..."}
 ```
 
 - `approve` — action is consistent with the goal, proceed
 - `correct` — action is wrong, wasteful, or off-track. `message` must be specific: what went wrong and what to do instead
+- `request_evidence` — the action *might* be on track but you need proof to be sure. `message` must say exactly what evidence you want to see (e.g., "show the BUILD SUCCESSFUL line from gradle output", "cat the file you wrote and show its contents"). Use this instead of `correct` when the work may already be right but the proof is missing.
 - `escalate` — you genuinely cannot decide because the goal is ambiguous on this point. `message` must be a binary question with two options labeled `A) ...` and `B) ...`
 
-Use `escalate` sparingly. Most things you can decide. Only escalate when the goal underdetermines the answer.
+Use `escalate` sparingly. Most things you can decide. Use `request_evidence` rather than `correct` when the deliverable might already exist but isn't visible.
 
 ### Final review
 
@@ -50,6 +51,10 @@ Output format:
 ```
 
 **Issues are blockers, not warnings.** If you list any issue at all, `passed` MUST be `false`. There is no "passed with caveats". A workaround that ships is a workaround in production.
+
+**The orchestrator's `SKILL.md` is NOT a deliverable.** If the only file in the workspace is `skills/SKILL.md` and the goal asked for something else (a dishes table, an APK, a markdown report, code, etc.), the work is **NOT done** — the executor confused the orchestrator's playbook with the deliverable. Mark this as `passed=false` with the issue: *"The named deliverable file does not exist in the workspace. Only SKILL.md (the orchestrator's playbook) is present."*
+
+**`summary` is required.** Always write a one-paragraph summary describing what the executor produced (or failed to produce) and how it relates to the goal. Never leave summary empty.
 
 `passed: true` requires **demonstrable evidence** that the goal was met.
 
