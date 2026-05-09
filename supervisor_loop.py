@@ -60,8 +60,10 @@ def _summarize_log(log: list[dict], limit: int = 80, full_text: bool = False) ->
     return "\n".join(lines) or "(no actions)"
 
 
-def _list_workspace_artifacts(workspace: Path, max_files: int = 8, max_bytes_per_file: int = 8000) -> str:
+def _list_workspace_artifacts(workspace: Path, max_files: int = 8, max_bytes_per_file: int = 60000) -> str:
     """List interesting artifact files in the workspace and inline their content for the reviewer.
+    V3 bug fix: cap raised from 8KB to 60KB so medium-sized markdown reports / code files
+    aren't reported as 'truncated' by the reviewer (which caused a false-fail on a 9KB report).
     Skips skills/, .claude/, hidden dirs, and known build noise."""
     if not workspace.exists():
         return "(workspace missing)"
