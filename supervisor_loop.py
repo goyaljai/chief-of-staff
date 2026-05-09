@@ -197,7 +197,7 @@ class SupervisorLoop:
             try:
                 library_match = rag.find_matching_skill(
                     self.task.goal + " " + (getattr(self.task, "skill_preview", "") or "")[:500],
-                    distance_max=0.30,
+                    distance_max=0.40,
                 )
             except Exception as e:
                 STORE.append_log(self.task.id, {"kind": "library_lookup_error", "msg": str(e)})
