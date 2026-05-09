@@ -1,6 +1,16 @@
 import os
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).parent.resolve()
+_env_file = _PROJECT_ROOT / ".env"
+if _env_file.exists():
+    for line in _env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
 DATABRICKS_TOKEN = os.environ.get("DATABRICKS_TOKEN", "")
 DATABRICKS_BASE_URL = os.environ.get("DATABRICKS_BASE_URL", "")
 DATABRICKS_MODEL = os.environ.get("DATABRICKS_MODEL", "databricks-gpt-5-4")
