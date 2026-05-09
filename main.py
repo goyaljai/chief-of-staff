@@ -173,21 +173,39 @@ def get_task(task_id: str):
     return public
 
 
-def _list_artifacts(workspace: str, max_files: int = 20, max_preview: int = 3000) -> list[dict]:
-    """List user-facing artifact files in the workspace with previews."""
+DELIVERABLE_BINARY_EXTS = (".apk", ".ipa", ".jar", ".aar", ".zip", ".tar.gz", ".tgz", ".whl", ".dmg", ".pkg")
+
+
+def _list_artifacts(workspace: str, max_files: int = 30, max_preview: int = 3000) -> list[dict]:
+    """List user-facing artifact files in the workspace.
+    Skips build noise EXCEPT for high-value binary deliverables (APK, JAR, etc.)
+    which are surfaced with metadata only (no content preview)."""
     if not workspace:
         return []
     p = Path(workspace)
     if not p.exists():
         return []
     skip_dirs = {"skills", ".claude", ".gradle", ".idea", "build", "node_modules",
-                 "__pycache__", "venv", ".venv", "intermediates", "outputs"}
+                 "__pycache__", "venv", ".venv", "intermediates"}
     out: list[dict] = []
+    deliverables: list[dict] = []
     for f in sorted(p.rglob("*"), key=lambda x: x.stat().st_mtime if x.exists() else 0, reverse=True):
         if not f.is_file():
             continue
         rel = f.relative_to(p)
+        name = rel.name.lower()
+        is_deliverable = any(name.endswith(ext) for ext in DELIVERABLE_BINARY_EXTS)
         if any(part in skip_dirs or part.startswith(".") for part in rel.parts[:-1]):
+            if is_deliverable:
+                try:
+                    deliverables.append({
+                        "path": str(rel),
+                        "abs_path": str(f),
+                        "size_bytes": f.stat().st_size,
+                        "preview": "(binary deliverable — not previewed)",
+                    })
+                except Exception:
+                    pass
             continue
         if rel.name.startswith("."):
             continue
@@ -195,7 +213,9 @@ def _list_artifacts(workspace: str, max_files: int = 20, max_preview: int = 3000
             size = f.stat().st_size
             preview = ""
             try:
-                if size < 200_000:
+                if is_deliverable:
+                    preview = "(binary deliverable — not previewed)"
+                elif size < 200_000:
                     preview = f.read_text(errors="replace")[:max_preview]
             except Exception:
                 preview = "(binary)"
@@ -209,7 +229,7 @@ def _list_artifacts(workspace: str, max_files: int = 20, max_preview: int = 3000
                 break
         except Exception:
             continue
-    return out
+    return deliverables + out
 
 
 def _last_claude_output(log: list[dict]) -> str:
