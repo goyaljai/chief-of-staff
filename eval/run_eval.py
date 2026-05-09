@@ -64,6 +64,14 @@ def run_one(client: httpx.Client, base: str, task: dict, timeout: int = 1500) ->
     if "next_steps_must_include" in expected:
         ns = result.get("next_steps", "") or ""
         checks["next_steps_must_include"] = all(s in ns for s in expected["next_steps_must_include"])
+    if "next_steps_must_include_any_of" in expected:
+        ns = result.get("next_steps", "") or ""
+        ok = True
+        for group in expected["next_steps_must_include_any_of"]:
+            if not any(re.search(p, ns) for p in group):
+                ok = False
+                break
+        checks["next_steps_must_include_any_of"] = ok
     if "summary_must_mention" in expected:
         s = result.get("summary", "") or ""
         checks["summary_must_mention"] = all(w.lower() in s.lower() for w in expected["summary_must_mention"])

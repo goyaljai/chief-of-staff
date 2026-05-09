@@ -10,7 +10,7 @@
         "deliverable_files": ["calc.py"],
         "should_pass_review": true,
         "max_loops": 2,
-        "next_steps_must_include": ["python3", "calc.py"]
+        "next_steps_must_include_any_of": [["python3 calc.py", "python calc.py", "python3 .*calc.py", "python .*calc.py"]]
       }
     },
     {

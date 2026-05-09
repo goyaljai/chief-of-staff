@@ -1,0 +1,16 @@
+{
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 0,
+    "error": 1,
+    "pass_rate": 0.0
+  },
+  "results": [
+    {
+      "id": "build-py-cli-calc",
+      "outcome": "ERROR",
+      "error": "timed out"
+    }
+  ]
+}
