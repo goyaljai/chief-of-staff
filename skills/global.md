@@ -44,3 +44,5 @@ Reject these as "done":
 - For requests using subjective labels like “best,” define the interpretation in the brief as a concrete selection lens (for example fame, prestige, popularity, or performance) so the executor can choose consistently and the reviewer can verify against that lens.
 - When a standard toolchain command fails, inspect the exact failing hook or injected config in the error output first and direct recovery at that layer before attempting artifact-level substitutions or file hunts.
 - When repository or supervisor write boundaries block edits in the intended target, treat that first as an environment-scope check and confirm whether the target path is actually inside the allowed workspace before concluding the task is blocked.
+- When a task requires a file to both run as a program and be imported by a test runner, explicitly require import-safe entry-point structure so verification does not trigger unintended side effects.
+- When a deliverable must be verified by human review, require a final output method whose entire contents will survive into the review artifact channel, not just the live action log.

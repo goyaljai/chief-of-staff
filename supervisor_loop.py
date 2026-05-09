@@ -320,6 +320,7 @@ class SupervisorLoop:
                     "corrections_made": len(self.task.corrections),
                     "workspace": str(self.workspace),
                 }
+                self._maybe_upload_trace(review)
                 return
 
             self.task.corrections.extend(review["issues"])
@@ -365,6 +366,29 @@ class SupervisorLoop:
                 grounding_nudge=grounding,
             )
 
+    def _maybe_inject_midloop_nudge(self):
+        """V3 #8: mid-loop grounding. Every 25 tool_use events without a verification op,
+        synthesize a nudge and append to corrections (will be folded into next loop's prompt
+        OR — when we add true interrupt — injected directly mid-flight)."""
+        actions = sum(1 for e in self.task.log if e.get("kind") == "tool_use")
+        if actions == 0 or actions % 25 != 0:
+            return
+        recent_text = " ".join(json.dumps(e.get("input") or {}).lower() for e in self.task.log[-25:] if e.get("kind") == "tool_use")
+        if any(k in recent_text for k in ("gradle", "pytest", "test ", "build", "verify", "check")):
+            return
+        try:
+            nudge = self.orchestrator.generate_grounding_nudge(
+                task=self.task.goal,
+                brief=self.task.brief,
+                action_log_summary=_summarize_log(self.task.log, limit=25),
+                loop_num=0,
+            )
+            if nudge:
+                self.task.corrections.append(f"[mid-loop nudge] {nudge}")
+                STORE.append_log(self.task.id, {"kind": "midloop_nudge", "nudge": nudge[:300]})
+        except Exception:
+            pass
+
     def _on_event(self, event: ClaudeEvent):
         if event.type == "init":
             STORE.append_log(self.task.id, {"kind": "init", "session_id": event.session_id})
@@ -381,6 +405,7 @@ class SupervisorLoop:
                 "tool": event.tool_name,
                 "input": event.tool_input,
             })
+            self._maybe_inject_midloop_nudge()
 
             if event.tool_name == "TodoWrite":
                 todos = (event.tool_input or {}).get("todos") or []
@@ -479,6 +504,34 @@ class SupervisorLoop:
                 "via": "auto_orchestrator",
             })
             return True
+
+    def _maybe_upload_trace(self, review: dict):
+        """V3 #11: opt-in anonymized trace upload. Only fires if TRACE_UPLOAD_URL is set."""
+        import os as _os
+        url = _os.environ.get("TRACE_UPLOAD_URL", "").strip()
+        if not url:
+            return
+        try:
+            import urllib.request as _ur, urllib.error as _ue
+            payload = {
+                "task_id_hash": __import__("hashlib").sha256(self.task.id.encode()).hexdigest()[:16],
+                "goal": self.task.goal,
+                "loops": self.task.loop_count if hasattr(self.task, "loop_count") else None,
+                "passed": review.get("passed", False),
+                "summary": review.get("summary", ""),
+                "skill_md": self.task.skill_md,
+                "cost_in": self.task.cost_databricks_in,
+                "cost_out": self.task.cost_databricks_out,
+            }
+            data = __import__("json").dumps(payload).encode()
+            req = _ur.Request(url, data=data, headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {_os.environ.get('TRACE_UPLOAD_TOKEN','')}",
+            })
+            _ur.urlopen(req, timeout=5).read()
+            STORE.append_log(self.task.id, {"kind": "trace_uploaded"})
+        except Exception as e:
+            STORE.append_log(self.task.id, {"kind": "trace_upload_error", "msg": str(e)})
 
     def _index_in_rag(self, review: dict):
         try:

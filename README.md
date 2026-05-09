@@ -4,8 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![V2](https://img.shields.io/badge/version-V2-success.svg)](prd_doc.md)
-[![Telegram](https://img.shields.io/badge/interface-Telegram-blue.svg)](https://core.telegram.org/bots)
+[![V2.5 on main](https://img.shields.io/badge/main-V2.5-success.svg)](prd_doc.md)
+[![V3 on develop](https://img.shields.io/badge/develop-V3-orange.svg)](https://github.com/goyaljai/chief-of-staff/tree/develop)
 
 ---
 
@@ -21,14 +21,14 @@ The bottleneck isn't speed. It's the **admin tax** of being the supervisor.
 
 `chief-of-staff` is a management layer that sits between you and Claude Code.
 
-You give it any task — code, research, writing, analysis — via **Telegram or curl**. It asks 3-5 sharp upfront questions. Disappears. Manages Claude end-to-end. Comes back when it's done. **Only interrupts you when it genuinely needs a human decision.**
+Give it any task — code, research, writing, analysis — via **Telegram**, **web UI**, or **curl**. It asks 3-5 sharp upfront questions. Disappears. Manages Claude end-to-end. Comes back when it's done. **Only interrupts you when it genuinely needs a human decision.**
 
 ```
-YOU (Telegram)
+YOU (Telegram / web UI / curl)
   │  one task, 3-5 answers
   ▼
 ORCHESTRATOR (Databricks LLM, your manager)
-  │  meta-thinks → SKILL.md → brief
+  │  meta-thinks → SKILL → brief
   ▼
 CLAUDE CODE (headless, doer)
   │  every action streams back
@@ -39,252 +39,158 @@ REVIEWER (independent QA LLM, blind to brief)
 3 correction loops → escalate to you only if truly stuck
 ```
 
-## What makes it different
-
-| Product | Has supervisor layer? | Real permission enforcement? | Asks you 0 Qs over time? | Open source? |
-|---|---|---|---|---|
-| Devin | No — you supervise | No | No | No ($500/mo) |
-| OpenHands | No — autonomous, you watch | No | No | Yes |
-| Cursor / Copilot | No — approves every step | No | No | No |
-| LangGraph / CrewAI | DIY | DIY | DIY | Yes (frameworks, not products) |
-| **chief-of-staff** | **Yes — as a product** | **Yes — PreToolUse hook + workspace boundaries** | **Yes — auto-promoting skill library** | **Yes (MIT)** |
-
-**Core insight:** the orchestrator's value is *management instinct*, not *domain knowledge*. It generates a fresh `SKILL.md` per task ([Anthropic skill-creator format](https://github.com/anthropics/skills/tree/main/skills/skill-creator)) capturing what *this* task needs — failure patterns, verification criteria, scope boundaries. Same machine handles a code task, a research task, a writing task — orchestrator figures out what each needs.
-
-## What you actually experience
-
-**On Telegram:**
-
-```
-You: build a hello world android app in kotlin
-
-Bot: 🤔 Thinking about clarifying questions...
-Bot: 📋 I have 3 question(s).
-     Q1: What does "done" mean — builds with assembleDebug, or runs end-to-end?
-
-You: builds with assembleDebug
-
-Bot: Q2: Compose or XML views?
-
-You: XML, keep it simple
-
-Bot: Q3: Min SDK?
-
-You: API 24
-
-Bot: Started task 84505ec6f7f2. I'll ping you when there's news.
-Bot: What I'll do: Build a complete Android Studio project for a Kotlin
-     hello world app with XML views and minSdk 24, ready for assembleDebug.
-
-[~9 minutes later]
-
-Bot: ✅ Task 84505ec6f7f2 done in 532s
-     Goal achieved: APK built (777KB, valid Zip with classes.dex +
-     AndroidManifest.xml). MainActivity.kt + activity_main.xml in place.
-     📁 ~/Desktop/supervisor-workspace/84505ec6f7f2
-```
-
-You answered 3 questions. Walked away. Came back to a built APK.
-
-## What's actually enforced (not just logged)
-
-A separate process intercepts every Claude tool call **before** it executes. Real OS-level enforcement, not callback theater.
-
-| Action | Behavior |
-|---|---|
-| `rm -rf /` or `rm -rf ~` | **BLOCK** (catastrophic, never legitimate) |
-| `rm -rf` to a path **outside** the task workspace | **BLOCK** (workspace escape) |
-| `Write`/`Edit` to absolute paths outside workspace | **BLOCK** (except `/tmp`, `/var/tmp`, `/private/tmp`) |
-| `sudo`, `curl|bash`, `chmod 777`, `pip install -<flag>` | **REVIEW** (allowed, flagged for reviewer) |
-| `./gradlew`, `git`, `npm`, `pytest`, `python`, etc. | **ALLOW** (safelisted dev tools) |
-| Unknown commands | **ALLOW + log** for reviewer |
-| MCP tools (`mcp__server__tool_name`) | **Hooked** — bash/write variants reviewed; auth/read allowed |
-
-Hook is installed per-task in `<workspace>/.claude/settings.json`. **Your normal Claude Code usage outside the supervised loop is untouched.**
-
-## The learning layer (the moat)
-
-Every task makes the orchestrator smarter. **No human curates the skills.**
-
-```
-On every task:
-  orchestrator.think_and_ask(task)
-    → meta-thinks: what does this task need?
-    → asks 3-5 sharp clarifying questions
-
-  user answers
-    → orchestrator.generate_skill_brief(task, answers, preview)
-    → produces <workspace>/skills/SKILL.md
-       (Anthropic skill-creator format: YAML frontmatter + body)
-
-  task runs (orchestrator + reviewer both load SKILL.md)
-
-  task completes
-    → orchestrator.find_promotable_lessons(task, SKILL.md, log, review)
-    → identifies lessons GENERAL enough for FUTURE different tasks
-    → appended to skills/global.md (deduped, capped at 50)
-```
-
-**Real example of an auto-promoted lesson** (from a research task):
-
-> *"For ranked or subjective requests, define the evaluation lens in the brief (fame, prestige, usability, cost, performance) so item selection is consistent and reviewable."*
-
-That lesson now applies to every future ranking/recommendation task. The system gets sharper with use.
-
-V2.5 will add a skill library — when a new task arrives, the orchestrator first checks if a past `SKILL.md`'s `description` field matches and reuses it before regenerating. After 10 Android tasks, the orchestrator stops asking "Compose or XML?" — it remembers your default.
-
-## Architecture
-
-```
-chief-of-staff/
-├── main.py                    FastAPI server + async task management
-├── telegram_bot.py            Telegram interface (long polling, A/B escalations)
-├── orchestrator.py            Orchestrator + Reviewer (Databricks LLM)
-├── claude_runner.py           Headless Claude Code wrapper (with timeout)
-├── permission_hook.py         PreToolUse hook — real OS-level enforcement
-├── supervisor_loop.py         The supervision loop (correction + review + promote)
-├── task_store.py              In-memory task state
-├── config.py                  Databricks config, paths
-├── prompts/
-│   ├── orchestrator.md        Manager prompt — Qs, brief, corrections
-│   └── reviewer.md            Independent QA prompt — blind to brief
-├── skills/
-│   └── global.md              Universal patterns + auto-promoted lessons
-└── prd_doc.md                 Full product spec
-```
-
-**Tech stack:**
-
-| Layer | Technology |
-|---|---|
-| Orchestrator + Reviewer LLM | Databricks AI Gateway (OpenAI-compatible). 5 SDK retries + 3 transient retries with exp. backoff. |
-| Claude Code execution | Claude Code CLI headless, `--output-format stream-json --verbose`, 20-min loop timeout |
-| Permission enforcement | PreToolUse hook script, per-task `<workspace>/.claude/settings.json` |
-| Correction mechanism | `interrupt()` + `--resume` with session_id + correction prompt |
-| Telegram | python-telegram-bot 22.x, long polling (no webhooks needed, no public URL) |
-| Per-task skill format | Anthropic skill-creator (YAML frontmatter + body) |
-| Orchestration | Plain async/await + asyncio (no LangGraph; overkill for V2 scale) |
-
-## Quick start
+## Quick start (Docker — recommended)
 
 ```bash
 git clone https://github.com/goyaljai/chief-of-staff.git
 cd chief-of-staff
+cp .env.example .env
 
+# Edit .env to set:
+#   DATABRICKS_TOKEN=...
+#   DATABRICKS_BASE_URL=https://your-workspace.gcp.databricks.com/ai-gateway/mlflow/v1
+#   TELEGRAM_BOT_TOKEN=...        (optional — leave blank to skip Telegram)
+#   TELEGRAM_ALLOWED_USER_IDS=    (populate after first DM)
+
+docker-compose up -d
+```
+
+Server at `http://localhost:8000/`. Web UI is the dashboard. Telegram bot starts automatically if token is set.
+
+## Quick start (Python local)
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
 cp .env.example .env
-# Edit .env to add:
-#   DATABRICKS_TOKEN=your_token
-#   DATABRICKS_BASE_URL=https://your-workspace.gcp.databricks.com/ai-gateway/mlflow/v1
-#   TELEGRAM_BOT_TOKEN=from_botfather   (optional — leave blank to skip Telegram)
-#   TELEGRAM_ALLOWED_USER_IDS=          (optional — populate after first DM)
-
-# Make sure `claude` CLI is installed and authenticated
-# https://docs.claude.com/en/docs/claude-code
-
-# Start the server
-python3 main.py    # serves on :8000
-
-# (optional) Start the Telegram bot in a separate terminal
-python3 telegram_bot.py
+# edit .env per above
+python3 main.py            # server on :8000
+python3 telegram_bot.py    # bot (separate terminal)
 ```
 
-DM the bot once to discover your `user_id`, paste it into `TELEGRAM_ALLOWED_USER_IDS`, restart.
+## Submitting tasks (3 ways)
 
-### Try it via curl
+**1. Web UI** — `http://localhost:8000/` → click **+ New task** → type goal → answer questions → walk away.
 
+**2. Telegram** — DM your bot. The first message tells you your `user_id`; add it to `TELEGRAM_ALLOWED_USER_IDS` and restart.
+
+**3. curl**:
 ```bash
-# 1. Get clarifying questions
-curl -s -X POST http://localhost:8000/task/questions \
-  -H "Content-Type: application/json" \
-  -d '{"task": "list 5 best mango varieties grown in India with their region and season"}'
+curl -X POST http://localhost:8000/task/questions \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"build a hello world android app in kotlin"}'
 
-# 2. Submit answers
-curl -s -X POST http://localhost:8000/task/run \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/task/run \
+  -H 'Content-Type: application/json' \
   -d '{
-    "task": "list 5 best mango varieties grown in India with their region and season",
-    "clarifications": {
-      "best_meaning": "most famous/premium",
-      "format": "small markdown table"
-    }
+    "task":"build a hello world android app in kotlin",
+    "clarifications":{"min_sdk":"24","ui":"XML views","done":"./gradlew assembleDebug succeeds"}
   }'
-
-# 3. Poll for completion
-curl -s http://localhost:8000/task/{task_id}
 ```
+
+## What's enforced (not just logged)
+
+A separate process intercepts every Claude tool call **before** it executes:
+
+| Action | Behavior |
+|---|---|
+| `rm -rf /` or `rm -rf ~` | **BLOCK** (catastrophic) |
+| `rm -rf` to a path **outside** the task workspace | **BLOCK** (workspace escape) |
+| `Write`/`Edit` to absolute paths outside workspace | **BLOCK** (except `/tmp`) |
+| `sudo`, `curl|bash`, `chmod 777` | **REVIEW** (allowed, flagged) |
+| `./gradlew`, `git`, `npm`, `pytest` | **ALLOW** (safelisted) |
+| MCP tools (`mcp__server__tool_name`) | **Hooked** — bash/write variants reviewed |
+
+Hook is per-task in `<workspace>/.claude/settings.json`. Your normal Claude Code usage is untouched.
+
+## The learning layer
+
+Every task makes the orchestrator smarter:
+
+```
+On every task:
+  1. Orchestrator meta-thinks: SKILL brief — what does THIS task need?
+  2. Asks 3-5 sharp clarifying questions
+  3. Builds executor brief, spawns Claude
+  4. Watches every action via stream
+  5. Reviewer reads actual workspace files (ground truth)
+  6. After completion, generic lessons promoted to skills/global.md
+```
+
+Real example of an auto-promoted lesson:
+> *"For ranked or subjective requests, define the evaluation lens in the brief (fame, prestige, usability, cost, performance) so item selection is consistent and reviewable."*
+
+After 50 tasks, `skills/global.md` is rich and the orchestrator's briefs are sharper. **The product gets smarter with use.**
 
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/task/questions` | Get 3-5 clarifying questions + skill_preview |
+| `POST` | `/task/questions` | Get 3-5 clarifying questions |
 | `POST` | `/task/run` | Submit task + answers; returns `task_id` |
-| `GET` | `/task/{id}` | Full state — status, log_tail, escalation, result, SKILL.md |
-| `POST` | `/task/{id}/escalation` | Answer pending escalation (`{"answer": "a"}` or `"b"`) |
-| `GET` | `/tasks` | List all tasks (debug) |
+| `GET` | `/task/{id}` | Full state — status, log, artifacts, next_steps, cost |
+| `POST` | `/task/{id}/escalation` | Answer pending escalation (`{"answer":"a"}`) |
+| `POST` | `/task/{id}/cancel` | Cancel a running task |
+| `POST` | `/task/{id}/resume` | Resume an interrupted task (after server restart) |
+| `POST` | `/task/{id}/note` | Add a side-note for an in-flight task |
+| `POST` | `/task/{id}/ask` | Ask anything about that specific task |
+| `GET` | `/task/{id}/stream` | SSE live event tail |
+| `POST` | `/ask` | Ask history-wide (FTS5 + ChromaDB) |
+| `GET` | `/tasks` | List tasks |
 | `GET` | `/health` | Liveness |
 
-## Validation
+## Branch layout
 
-Tested end-to-end against:
+| Branch | Status |
+|---|---|
+| `main` | V2.5 — stable. Tag for self-hosted users. |
+| `develop` | V3 work in progress (critical flaws fixed, bigger features WIP). |
 
-- **Hello World Android app** — built a real APK in 1 loop, 8m52s. APK valid (777KB Zip with `classes.dex` + `AndroidManifest.xml`). Reviewer caught real Android failure patterns: `RepositoriesMode.FAIL_ON_PROJECT_REPOS` downgrade, hardcoded `local.properties`.
-- **API integration on existing project** — modify-existing flow tested. Reviewer caught hidden `BUILD SUCCESSFUL` line and `GRADLE_USER_HOME` workaround.
-- **5 best mango varieties (research)** — passed in 2 loops. Loop 1 rejected for missing visible verification; loop 2 passed with real specifics (Alphonso, Dasheri, Langra, Kesar, Banganapalli — all real famous Indian mango varieties with correct regions and seasons).
-- **Skills auto-promotion** — after the research task, 2 generic lessons were promoted to `global.md` automatically. Same skills now apply to every future ranking/research task.
+V3 outstanding (planned, not yet merged):
+- Postgres + pgvector (replaces SQLite + ChromaDB)
+- DAG-based briefs + LangGraph fan-out for parallel exec
+- Eval harness for regression tracking
+- Mid-loop grounding nudges
+- Opt-in anonymized trace upload (foundation for fine-tuning)
 
-The reviewer doesn't pass mediocre work. **That's the proof of value.**
+See [prd_doc.md](prd_doc.md) for the full V3 spec.
 
-## What's in V1 vs V2 vs V3
+## Architecture
 
-**V1 (shipped):** Curl-based API, async task management, orchestrator, independent reviewer, headless Claude Code, real PreToolUse hooks with workspace boundary enforcement, correction loops, auto-resolve escalations. Validated end-to-end on Hello World Android.
+```
+chief-of-staff/
+├── main.py                FastAPI server, async task management
+├── telegram_bot.py        Telegram bot (long polling, no public URL needed)
+├── orchestrator.py        Orchestrator + Reviewer (Databricks LLM)
+├── claude_runner.py       Headless Claude Code wrapper, --resume, timeout
+├── permission_hook.py     PreToolUse hook — real OS-level enforcement
+├── supervisor_loop.py     The supervision loop
+├── task_store.py          In-memory + SQLite-persisted task state
+├── db.py                  SQLite schema + FTS5
+├── rag.py                 ChromaDB layer (vector search)
+├── config.py              Env config, paths
+├── prompts/
+│   ├── orchestrator.md    Manager prompt
+│   └── reviewer.md        Independent QA prompt
+├── skills/
+│   └── global.md          Universal patterns + auto-promoted lessons
+├── static/
+│   └── index.html         Dashboard + Ask UI
+├── diagrams/v2/           Excalidraw architecture + lifecycle diagrams
+├── Dockerfile
+├── docker-compose.yml
+└── prd_doc.md             Full product spec
+```
 
-**V2 (~70% shipped):**
-- ✅ Telegram bot interface (long polling, single-user whitelist)
-- ✅ Dynamic per-task SKILL.md (Anthropic skill-creator format)
-- ✅ Skill auto-promotion to `global.md`
-- ✅ Reviewer reads workspace artifacts as ground truth
-- ✅ Per-action reviewer expanded to Write/Edit/MultiEdit/MCP
-- ✅ MCP hook coverage
-- ✅ Databricks retry/backoff (5 SDK + 3 explicit)
-- ✅ 20-min loop timeout
-- ✅ skill_preview cache & reuse
-- ✅ Existing-repo support (`working_dir` param)
+## Validated against
 
-**V2.5 (next):**
-- Skill library + match-by-description (the real "asks 0 Qs after 10 tasks" win)
-- RAG layer (SQLite + ChromaDB)
-- SSE streaming
-- Cost tracking
-- Cancel endpoint
-- Web UI
-- Permission profile UI
-
-**V3:**
-- Parallel execution (fan-out/fan-in)
-- Multi-task queue with dependencies
-- Fine-tuned orchestrator on real session data — *the moat*
-- 24/7 hosted backend
-- Multi-user with auth + billing
-
-## Positioning
-
-> "A smart manager that never sleeps. Give it any task. Answer 3-5 questions. Come back when it's done."
-
-Not a coding tool. Not a copilot. Not an agent runner.
-
-**A manager.** The first AI product where you are genuinely not the supervisor.
+- Hello World Android app — built a real APK in 1 loop, reviewer caught Gradle workarounds
+- 5 best mango varieties research — reviewer rejected first attempt for missing verification, accepted second
+- Webapp + connect Android app to it — multi-step task, completed in 3 loops
+- Python CLI calculator — passed loop 1
+- Postgres vs SQLite research report — 9KB markdown produced
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-## Status
-
-V2 — actively developed. See [prd_doc.md](prd_doc.md) for full spec, V2.5/V3 roadmap, and architecture details.
-
-Issues, ideas, and PRs welcome.

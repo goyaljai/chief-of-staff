@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "description": "Reference evaluation suite for chief-of-staff orchestrator. Run regularly to track quality.",
+  "tasks": [
+    {
+      "id": "build-py-cli-calc",
+      "task": "Build a Python CLI calculator at calc.py with no external dependencies. Supports + - * / and parentheses.",
+      "clarifications": {"deliverable": "calc.py", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["calc.py"],
+        "should_pass_review": true,
+        "max_loops": 2,
+        "next_steps_must_include": ["python3", "calc.py"]
+      }
+    },
+    {
+      "id": "research-mango-list",
+      "task": "list 5 best mango varieties grown in India with their region and season",
+      "clarifications": {"format": "markdown table", "best_meaning": "famous/premium varieties"},
+      "expected": {
+        "deliverable_files": [".*\\.md$"],
+        "should_pass_review": true,
+        "summary_must_mention": ["mango"],
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "build-android-helloworld",
+      "task": "build a hello world android app in kotlin with min sdk 24, XML views",
+      "clarifications": {"done": "./gradlew assembleDebug succeeds", "stack": "Kotlin DSL Gradle"},
+      "expected": {
+        "deliverable_files": ["app/build/outputs/apk/debug/.*\\.apk"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "research-postgres-vs-sqlite",
+      "task": "Compare Postgres vs SQLite for a 1k-user webapp. Output postgres_vs_sqlite.md.",
+      "clarifications": {"deliverable": "postgres_vs_sqlite.md"},
+      "expected": {
+        "deliverable_files": ["postgres_vs_sqlite.md"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "writing-product-spec",
+      "task": "draft a 1-page product spec for a habit tracker app",
+      "clarifications": {"format": "markdown"},
+      "expected": {
+        "deliverable_files": [".*\\.md$"],
+        "should_pass_review": true
+      }
+    }
+  ]
+}

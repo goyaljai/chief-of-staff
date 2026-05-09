@@ -32,13 +32,44 @@ LEARNED_HEADER = "## Learned from past runs"
 MAX_LEARNED_ENTRIES = 50
 
 
+_LANGSMITH_TRACED = False
+
+
+def _maybe_init_langsmith() -> bool:
+    """V3 #14: enable LangSmith tracing if env vars say so. Wraps OpenAI client globally."""
+    global _LANGSMITH_TRACED
+    if _LANGSMITH_TRACED:
+        return True
+    import os as _os
+    if _os.environ.get("LANGSMITH_TRACING", "").lower() not in ("true", "1", "yes"):
+        return False
+    if not _os.environ.get("LANGSMITH_API_KEY"):
+        print("[langsmith] LANGSMITH_TRACING=true but LANGSMITH_API_KEY missing; skipping")
+        return False
+    try:
+        from langsmith.wrappers import wrap_openai  # noqa: F401
+        _LANGSMITH_TRACED = True
+        print(f"[langsmith] tracing enabled (project={_os.environ.get('LANGSMITH_PROJECT', 'chief-of-staff')})")
+        return True
+    except Exception as e:
+        print(f"[langsmith] failed to init: {e}")
+        return False
+
+
 def _client() -> OpenAI:
-    return OpenAI(
+    base = OpenAI(
         api_key=DATABRICKS_TOKEN,
         base_url=DATABRICKS_BASE_URL,
         max_retries=5,
         timeout=120.0,
     )
+    if _maybe_init_langsmith():
+        try:
+            from langsmith.wrappers import wrap_openai
+            return wrap_openai(base)
+        except Exception:
+            return base
+    return base
 
 
 def _load_prompt(name: str) -> str:
@@ -273,6 +304,23 @@ class Orchestrator:
                 "Be specific to THIS task. Output only the SKILL.md content. No preamble."
             )
         return _chat(self.system, user, max_tokens=3500, skills_context=skills).strip()
+
+    def parse_dag(self, brief: str) -> list[dict] | None:
+        """V3 #6: parse a DAG out of the brief if the brief has a 'Steps' section.
+        Each step has id, action, depends_on (list). Returns None if brief is plain prose.
+        Used by V3 #7 to fan out independent steps."""
+        import re as _re
+        m = _re.search(r"##\s+(?:Steps|DAG|Plan)\s*\n(.*?)(?:\n##\s|\Z)", brief, _re.IGNORECASE | _re.DOTALL)
+        if not m:
+            return None
+        body = m.group(1)
+        steps = []
+        for line in body.splitlines():
+            mm = _re.match(r"^\s*[-*]?\s*([A-Za-z0-9_\-]+):\s*(.+?)(?:\s*\(deps?:\s*([^)]*)\))?\s*$", line)
+            if mm:
+                deps = [d.strip() for d in (mm.group(3) or "").split(",") if d.strip()]
+                steps.append({"id": mm.group(1), "action": mm.group(2).strip(), "depends_on": deps})
+        return steps or None
 
     def build_brief(self, task: str, clarifications: dict[str, str], workspace: str, inline_skill: str = "") -> str:
         """Build the executor brief. The brief is what gets passed to Claude Code as the prompt."""

@@ -1,0 +1,30 @@
+services:
+  server:
+    build: .
+    container_name: cos-server
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./workspaces:/workspaces
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  bot:
+    build: .
+    container_name: cos-bot
+    command: ["python3", "telegram_bot.py"]
+    env_file: .env
+    environment:
+      - SUPERVISOR_API_BASE_URL=http://server:8000
+    volumes:
+      - ./data:/data
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
