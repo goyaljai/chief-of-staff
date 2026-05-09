@@ -23,7 +23,7 @@ def matches_any(name: str, patterns: list) -> bool:
     return any(re.match(p, name) for p in patterns)
 
 
-def run_one(client: httpx.Client, base: str, task: dict, timeout: int = 1200) -> dict:
+def run_one(client: httpx.Client, base: str, task: dict, timeout: int = 1500) -> dict:
     started = time.time()
     r = client.post(f"{base}/task/run", json={
         "task": task["task"],
@@ -33,10 +33,15 @@ def run_one(client: httpx.Client, base: str, task: dict, timeout: int = 1200) ->
     task_id = r.json()["task_id"]
 
     while time.time() - started < timeout:
-        s = client.get(f"{base}/task/{task_id}", timeout=30).json()
+        try:
+            s = client.get(f"{base}/task/{task_id}", timeout=60).json()
+        except Exception as e:
+            print(f"   [poll error: {e}, retrying]")
+            time.sleep(8)
+            continue
         if s["status"] in ("done", "failed", "abandoned", "cancelled"):
             break
-        time.sleep(5)
+        time.sleep(8)
     else:
         return {"id": task["id"], "task_id": task_id, "outcome": "TIMEOUT", "duration_secs": time.time() - started}
 
