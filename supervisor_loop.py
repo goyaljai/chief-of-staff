@@ -60,10 +60,11 @@ def _summarize_log(log: list[dict], limit: int = 80, full_text: bool = False) ->
     return "\n".join(lines) or "(no actions)"
 
 
-def _list_workspace_artifacts(workspace: Path, max_files: int = 8, max_bytes_per_file: int = 60000) -> str:
+def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_per_file: int = 60000) -> str:
     """List interesting artifact files in the workspace and inline their content for the reviewer.
-    V3 bug fix: cap raised from 8KB to 60KB so medium-sized markdown reports / code files
-    aren't reported as 'truncated' by the reviewer (which caused a false-fail on a 9KB report).
+    V3 bug fix #1: cap raised from 8KB to 60KB so medium-sized markdown/code files aren't truncated.
+    V3 bug fix #2: max_files raised 8 → 30. Android projects have 15-25 files; truncating at 8
+    caused reviewer to say 'MainActivity.kt missing' when only gradle config files showed up.
     Skips skills/, .claude/, hidden dirs, and known build noise."""
     if not workspace.exists():
         return "(workspace missing)"
