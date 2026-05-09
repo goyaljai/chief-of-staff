@@ -1,0 +1,71 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {"id":"title","type":"text","x":480,"y":20,"width":540,"height":40,"text":"chief-of-staff — V3 Architecture","fontFamily":3,"fontSize":24,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1e1e1e","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100},
+    {"id":"subtitle","type":"text","x":380,"y":62,"width":740,"height":24,"text":"V3 self-hosted  ·  parallel-safe  ·  RAG-backed  ·  observable via LangSmith  ·  containerized","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+
+    {"id":"user","type":"ellipse","x":620,"y":120,"width":160,"height":70,"text":"USER\n(phone / desktop)","fontFamily":3,"fontSize":15,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1971c2","backgroundColor":"#a5d8ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"tg","type":"rectangle","x":340,"y":230,"width":220,"height":60,"text":"Telegram cloud\n(api.telegram.org)","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#0c8599","backgroundColor":"#c5f6fa","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"webui","type":"rectangle","x":600,"y":230,"width":200,"height":60,"text":"Web UI\nDashboard + Ask","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5f3dc4","backgroundColor":"#e5dbff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"curl","type":"rectangle","x":840,"y":230,"width":180,"height":60,"text":"curl / scripts\nREST API","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5f3dc4","backgroundColor":"#f3f0ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid","strokeStyle":"dashed"},
+    {"id":"langs","type":"rectangle","x":1060,"y":230,"width":220,"height":60,"text":"LangSmith UI\n(traces, latency, cost)","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#0ca678","backgroundColor":"#c3fae8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid","strokeStyle":"dashed"},
+
+    {"id":"a_user_tg","type":"arrow","x":660,"y":192,"width":-220,"height":38,"strokeColor":"#1971c2","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-220,38]]},
+    {"id":"a_user_web","type":"arrow","x":700,"y":192,"width":0,"height":38,"strokeColor":"#5f3dc4","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[0,38]]},
+    {"id":"a_user_curl","type":"arrow","x":740,"y":192,"width":190,"height":38,"strokeColor":"#5f3dc4","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[190,38]]},
+
+    {"id":"mac","type":"rectangle","x":40,"y":340,"width":1300,"height":760,"text":"","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"#f8f9fa","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"hachure","strokeStyle":"dashed"},
+    {"id":"mac_label","type":"text","x":60,"y":352,"width":600,"height":24,"text":"Self-hosted on user's Mac / VM (V3 — no cloud needed)","fontFamily":3,"fontSize":14,"textAlign":"left","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+
+    {"id":"docker","type":"rectangle","x":80,"y":390,"width":1220,"height":690,"text":"","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1864ab","backgroundColor":"#dbe4ff","strokeWidth":1,"roughness":0,"opacity":100,"fillStyle":"hachure","strokeStyle":"dotted"},
+    {"id":"docker_label","type":"text","x":100,"y":400,"width":300,"height":20,"text":"docker-compose: server + bot containers","fontFamily":3,"fontSize":12,"textAlign":"left","verticalAlign":"middle","strokeColor":"#1864ab","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+
+    {"id":"bot","type":"rectangle","x":110,"y":440,"width":240,"height":80,"text":"telegram_bot.py\nlong-poll + PicklePersistence\n(state survives restart)","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#0c8599","backgroundColor":"#e3fafc","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"api","type":"rectangle","x":500,"y":440,"width":260,"height":80,"text":"main.py — FastAPI\n/task/* · /ask · /task/{id}/ask\n/cancel · /resume · /stream · /note","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5f3dc4","backgroundColor":"#e5dbff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"a_tg_bot","type":"arrow","x":450,"y":290,"width":-200,"height":150,"startBinding":{"elementId":"tg","focus":0,"gap":1},"endBinding":{"elementId":"bot","focus":0,"gap":1},"strokeColor":"#0c8599","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-200,150]]},
+    {"id":"a_web_api","type":"arrow","x":700,"y":290,"width":-70,"height":150,"strokeColor":"#5f3dc4","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-70,150]]},
+    {"id":"a_curl_api","type":"arrow","x":900,"y":290,"width":-200,"height":150,"strokeColor":"#5f3dc4","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[-200,150]]},
+    {"id":"a_bot_api","type":"arrow","x":350,"y":480,"width":150,"height":0,"strokeColor":"#5f3dc4","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[150,0]]},
+
+    {"id":"loop","type":"rectangle","x":500,"y":580,"width":260,"height":80,"text":"supervisor_loop.py\norchestrator + reviewer + Claude\nper-task contextvar callback","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2f9e44","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"a_api_loop","type":"arrow","x":630,"y":520,"width":0,"height":60,"strokeColor":"#2f9e44","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[0,60]]},
+
+    {"id":"orc","type":"rectangle","x":110,"y":720,"width":280,"height":110,"text":"ORCHESTRATOR (LLM)\nthink_and_ask · build_brief\nparse_dag · grounding_nudge\nfind_promotable_lessons","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e67700","backgroundColor":"#fff3bf","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"rev","type":"rectangle","x":900,"y":720,"width":280,"height":110,"text":"REVIEWER (LLM)\nblind to brief (V3 fix)\nrequires next_steps\nrequires summary","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#c92a2a","backgroundColor":"#ffe3e3","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"db_brick","type":"rectangle","x":500,"y":720,"width":260,"height":110,"text":"Databricks AI Gateway\nwrapped via langsmith.wrap_openai\nif LANGSMITH_TRACING=true","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#862e9c","backgroundColor":"#f3d9fa","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"a_loop_orc","type":"arrow","x":500,"y":640,"width":-220,"height":80,"startBinding":{"elementId":"loop","focus":0,"gap":1},"endBinding":{"elementId":"orc","focus":0,"gap":1},"strokeColor":"#2f9e44","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-220,80]]},
+    {"id":"a_loop_rev","type":"arrow","x":760,"y":640,"width":250,"height":80,"strokeColor":"#2f9e44","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[250,80]]},
+    {"id":"a_orc_brick","type":"arrow","x":390,"y":780,"width":110,"height":-5,"strokeColor":"#862e9c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[110,-5]]},
+    {"id":"a_rev_brick","type":"arrow","x":900,"y":780,"width":-140,"height":-5,"strokeColor":"#862e9c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-140,-5]]},
+
+    {"id":"a_brick_langs","type":"arrow","x":760,"y":720,"width":380,"height":-490,"strokeColor":"#0ca678","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[380,-490]]},
+
+    {"id":"claude","type":"rectangle","x":110,"y":900,"width":260,"height":80,"text":"Claude Code\n--output-format stream-json\n20-min loop timeout","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1864ab","backgroundColor":"#a5d8ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"hook","type":"rectangle","x":420,"y":900,"width":260,"height":80,"text":"permission_hook.py\nworkspace boundary checks\nMCP-aware matchers","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#c92a2a","backgroundColor":"#ffe3e3","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"workspace","type":"rectangle","x":730,"y":900,"width":260,"height":80,"text":"~/Desktop/supervisor-workspace/\n{task_id}/.claude/settings.json\nartifacts + APK + reports","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"#e9ecef","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"dag","type":"rectangle","x":1010,"y":900,"width":260,"height":80,"text":"dag_executor.py\nfan-out via asyncio.gather\n(LangGraph upgrade pending)","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e8590c","backgroundColor":"#ffd8a8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid","strokeStyle":"dashed"},
+
+    {"id":"a_loop_claude","type":"arrow","x":500,"y":660,"width":-260,"height":240,"strokeColor":"#1864ab","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-260,240]]},
+    {"id":"a_claude_hook","type":"arrow","x":370,"y":940,"width":50,"height":0,"strokeColor":"#c92a2a","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[50,0]]},
+    {"id":"a_claude_ws","type":"arrow","x":370,"y":960,"width":360,"height":0,"strokeColor":"#5c5c5c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[360,0]]},
+    {"id":"a_loop_dag","type":"arrow","x":760,"y":660,"width":280,"height":240,"strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[280,240]]},
+
+    {"id":"sqlite","type":"rectangle","x":110,"y":1010,"width":260,"height":60,"text":"SQLite (db.py)\ntasks · log_entries · FTS5","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2b8a3e","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"chroma","type":"rectangle","x":420,"y":1010,"width":260,"height":60,"text":"ChromaDB (rag.py)\ntask_summaries · skill_descriptions","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2b8a3e","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"skills","type":"rectangle","x":730,"y":1010,"width":260,"height":60,"text":"skills/global.md\nauto-promoted lessons (50 cap)","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2b8a3e","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"pg","type":"rectangle","x":1010,"y":1010,"width":260,"height":60,"text":"Postgres + pgvector\n(scaffold; migration ready)","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"#e9ecef","strokeWidth":1,"roughness":0,"opacity":100,"fillStyle":"hachure","strokeStyle":"dashed"},
+
+    {"id":"trace_url","type":"rectangle","x":1080,"y":120,"width":220,"height":70,"text":"TRACE_UPLOAD_URL\n(opt-in, anonymized)\nfeeds fine-tuning corpus","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#0ca678","backgroundColor":"#c3fae8","strokeWidth":1,"roughness":0,"opacity":100,"fillStyle":"hachure","strokeStyle":"dashed"},
+    {"id":"a_loop_trace","type":"arrow","x":760,"y":620,"width":340,"height":-450,"strokeColor":"#0ca678","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[340,-450]]},
+
+    {"id":"legend","type":"text","x":80,"y":1100,"width":1240,"height":50,"text":"Solid = active component   ·   Dashed = optional / scaffolded   ·   Bot uses long-polling (no public URL needed)   ·   V3 adds: PicklePersistence, contextvar callbacks, RAG library lookup, mid-loop nudges, /resume, /ask, /note, LangSmith, Docker, Eval harness","fontFamily":3,"fontSize":11,"textAlign":"left","verticalAlign":"top","strokeColor":"#5c5c5c","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff", "gridSize": 20},
+  "files": {}
+}

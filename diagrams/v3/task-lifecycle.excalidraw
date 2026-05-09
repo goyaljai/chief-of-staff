@@ -1,0 +1,59 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {"id":"title","type":"text","x":420,"y":20,"width":640,"height":40,"text":"chief-of-staff — V3 Task Lifecycle","fontFamily":3,"fontSize":24,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1e1e1e","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100},
+    {"id":"subtitle","type":"text","x":380,"y":62,"width":740,"height":24,"text":"V3 additions in orange: skill library, mid-loop nudges, RAG indexing, trace upload, resume","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+
+    {"id":"s1","type":"rectangle","x":80,"y":120,"width":220,"height":80,"text":"1. User submits task\n(Telegram / Web UI / curl)","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1971c2","backgroundColor":"#a5d8ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s2","type":"rectangle","x":380,"y":120,"width":260,"height":80,"text":"2. think_and_ask:\nmeta-think + 3-5 questions","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e67700","backgroundColor":"#fff3bf","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s3","type":"rectangle","x":720,"y":120,"width":220,"height":80,"text":"3. User answers","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1971c2","backgroundColor":"#a5d8ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"s4","type":"rectangle","x":1020,"y":120,"width":260,"height":80,"text":"4. Skill library lookup\n(ChromaDB · distance ≤ 0.40)\n[V3 #4 NEW]","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e8590c","backgroundColor":"#ffd8a8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"s5","type":"rectangle","x":1020,"y":270,"width":260,"height":80,"text":"5. generate_skill_brief\n(refines past skill if matched)","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e67700","backgroundColor":"#fff3bf","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s6","type":"rectangle","x":720,"y":270,"width":220,"height":80,"text":"6. build_brief\n(in-memory only — no SKILL.md\nfile in workspace)","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e67700","backgroundColor":"#fff3bf","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s7","type":"rectangle","x":380,"y":270,"width":260,"height":80,"text":"7. Spawn Claude Code\n--resume on loop 2+\n20-min timeout","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1864ab","backgroundColor":"#a5d8ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"s8","type":"rectangle","x":80,"y":270,"width":220,"height":80,"text":"8. Per-action review\n(Bash/Write/Edit/MCP)\n+ mid-loop nudge every 25 actions\n[V3 #8 NEW]","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e8590c","backgroundColor":"#ffd8a8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"s9","type":"rectangle","x":80,"y":420,"width":220,"height":80,"text":"9. Final review\nreviewer reads workspace artifacts\n+ requires next_steps [V3 fix]","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#c92a2a","backgroundColor":"#ffe3e3","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s10","type":"diamond","x":380,"y":410,"width":260,"height":100,"text":"passed?\n(zero issues + evidence)","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5f3dc4","backgroundColor":"#e5dbff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s11","type":"rectangle","x":720,"y":420,"width":220,"height":80,"text":"11. Correction prompt\n+ user notes (V3)\n+ grounding nudge (V3)","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e67700","backgroundColor":"#fff3bf","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s12","type":"rectangle","x":1020,"y":420,"width":260,"height":80,"text":"12. Resume Claude\nmax 3 loops, then mark failed","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e8590c","backgroundColor":"#ffd8a8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"s13","type":"rectangle","x":380,"y":580,"width":260,"height":80,"text":"13. PASSED → done\n+ next_steps populated","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2f9e44","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s14","type":"rectangle","x":80,"y":580,"width":220,"height":80,"text":"14. Promote lessons\n→ skills/global.md","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2b8a3e","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s15","type":"rectangle","x":720,"y":580,"width":260,"height":80,"text":"15. Index in RAG\nChroma + FTS5\n(future tasks find this)","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2b8a3e","backgroundColor":"#d3f9d8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+    {"id":"s15b","type":"rectangle","x":1020,"y":580,"width":260,"height":80,"text":"15b. Trace upload (opt-in)\n→ TRACE_UPLOAD_URL\n[V3 #11 NEW]","fontFamily":3,"fontSize":11,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e8590c","backgroundColor":"#ffd8a8","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid","strokeStyle":"dashed"},
+
+    {"id":"s16","type":"rectangle","x":380,"y":730,"width":260,"height":80,"text":"16. Send result to user\nsummary + next_steps + cost","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#1971c2","backgroundColor":"#a5d8ff","strokeWidth":2,"roughness":0,"opacity":100,"fillStyle":"solid"},
+
+    {"id":"esc_box","type":"rectangle","x":80,"y":880,"width":1200,"height":150,"text":"","fontFamily":3,"fontSize":12,"textAlign":"center","verticalAlign":"middle","strokeColor":"#5c5c5c","backgroundColor":"#fff5f5","strokeWidth":1,"roughness":0,"opacity":100,"fillStyle":"hachure","strokeStyle":"dashed"},
+    {"id":"esc_label","type":"text","x":100,"y":890,"width":520,"height":24,"text":"V3 side-channels (only when truly needed)","fontFamily":3,"fontSize":14,"textAlign":"left","verticalAlign":"middle","strokeColor":"#c92a2a","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+    {"id":"esc_text","type":"text","x":100,"y":920,"width":1180,"height":100,"text":"Escalation:  reviewer can't decide → state.escalation set → bot sends A/B → user replies → resume.  30-min timeout → orchestrator auto-decides.\nSide-conversation:  user texts mid-task → POST /task/{id}/note → folded into next correction loop. Use 'new:' or /reset for a fresh task.\nCancel:  POST /task/{id}/cancel → status='cancelled'.   Resume after restart:  hydrate marks in-flight tasks as 'interrupted' → POST /task/{id}/resume.\nMid-loop nudge:  every 25 tool_use events without verification keyword → orchestrator generates a 1:1 nudge → appended to next correction.","fontFamily":3,"fontSize":11,"textAlign":"left","verticalAlign":"top","strokeColor":"#5c5c5c","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+
+    {"id":"a12","type":"arrow","x":300,"y":160,"width":80,"height":0,"strokeColor":"#1971c2","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a23","type":"arrow","x":640,"y":160,"width":80,"height":0,"strokeColor":"#1971c2","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a34","type":"arrow","x":940,"y":160,"width":80,"height":0,"strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a45","type":"arrow","x":1150,"y":200,"width":0,"height":70,"strokeColor":"#e67700","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[0,70]]},
+    {"id":"a56","type":"arrow","x":1020,"y":310,"width":-80,"height":0,"strokeColor":"#1864ab","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-80,0]]},
+    {"id":"a67","type":"arrow","x":720,"y":310,"width":-80,"height":0,"strokeColor":"#1864ab","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-80,0]]},
+    {"id":"a78","type":"arrow","x":380,"y":310,"width":-80,"height":0,"strokeColor":"#c92a2a","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-80,0]]},
+    {"id":"a89","type":"arrow","x":190,"y":350,"width":0,"height":70,"strokeColor":"#c92a2a","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[0,70]]},
+    {"id":"a910","type":"arrow","x":300,"y":460,"width":80,"height":0,"strokeColor":"#5f3dc4","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a10_yes","type":"arrow","x":510,"y":510,"width":-100,"height":70,"strokeColor":"#2f9e44","backgroundColor":"transparent","strokeWidth":3,"roughness":0,"opacity":100,"points":[[0,0],[-100,70]]},
+    {"id":"a10_yes_label","type":"text","x":420,"y":530,"width":80,"height":20,"text":"yes","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#2f9e44","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+    {"id":"a10_no","type":"arrow","x":640,"y":460,"width":80,"height":0,"strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a10_no_label","type":"text","x":650,"y":435,"width":60,"height":20,"text":"no","fontFamily":3,"fontSize":13,"textAlign":"center","verticalAlign":"middle","strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":1,"roughness":0,"opacity":100},
+    {"id":"a1112","type":"arrow","x":940,"y":460,"width":80,"height":0,"strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a12back","type":"arrow","x":1150,"y":420,"width":0,"height":-110,"strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[0,-110]]},
+    {"id":"a1314","type":"arrow","x":380,"y":620,"width":-80,"height":0,"strokeColor":"#2b8a3e","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[-80,0]]},
+    {"id":"a1315","type":"arrow","x":640,"y":620,"width":80,"height":0,"strokeColor":"#2b8a3e","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[80,0]]},
+    {"id":"a1515b","type":"arrow","x":980,"y":620,"width":40,"height":0,"strokeColor":"#e8590c","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"strokeStyle":"dashed","points":[[0,0],[40,0]]},
+    {"id":"a1316","type":"arrow","x":510,"y":660,"width":0,"height":70,"strokeColor":"#1971c2","backgroundColor":"transparent","strokeWidth":2,"roughness":0,"opacity":100,"points":[[0,0],[0,70]]}
+  ],
+  "appState": {"viewBackgroundColor": "#ffffff", "gridSize": 20},
+  "files": {}
+}
