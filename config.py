@@ -24,6 +24,12 @@ if not DATABRICKS_TOKEN or not DATABRICKS_BASE_URL:
     )
     sys.exit(1)
 
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_ALLOWED_USER_IDS = {
+    x.strip() for x in os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if x.strip()
+}
+SUPERVISOR_API_BASE_URL = os.environ.get("SUPERVISOR_API_BASE_URL", "http://localhost:8000")
+
 PROJECT_ROOT = Path(__file__).parent.resolve()
 PROMPTS_DIR = PROJECT_ROOT / "prompts"
 HOOK_SCRIPT = PROJECT_ROOT / "permission_hook.py"

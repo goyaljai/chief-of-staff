@@ -17,31 +17,77 @@ from config import (
     LOG_ROOT,
     MAX_CORRECTION_LOOPS,
 )
-from orchestrator import Orchestrator, Reviewer
+from orchestrator import Orchestrator, Reviewer, append_to_global, save_task_skill
 from task_store import STORE, TaskState
 
-REVIEW_TOOLS = {"Bash"}
+REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
 
 
-def _summarize_log(log: list[dict], limit: int = 80) -> str:
+def _is_reviewable_mcp_tool(tool_name: str) -> bool:
+    """MCP tools that look like Bash/Write/Edit variants warrant per-action review."""
+    if not tool_name or not tool_name.startswith("mcp__"):
+        return False
+    low = tool_name.lower()
+    return any(k in low for k in ("bash", "shell", "exec", "run_command", "write", "edit", "create_file", "delete"))
+
+
+def _summarize_log(log: list[dict], limit: int = 80, full_text: bool = False) -> str:
+    """Build a summary of recent log entries. When full_text=True, do NOT truncate
+    text/result/tool_result content — used at final_review time so the reviewer sees
+    the actual artifacts, not a truncated approximation."""
     lines = []
+    text_cap = 6000 if full_text else 200
+    result_cap = 6000 if full_text else 200
     for entry in log[-limit:]:
         kind = entry.get("kind")
         if kind == "tool_use":
             tname = entry.get("tool")
-            tinput = json.dumps(entry.get("input") or {})[:200]
+            tinput = json.dumps(entry.get("input") or {})[:300]
             lines.append(f"[tool] {tname}: {tinput}")
         elif kind == "tool_result":
-            out = (entry.get("output") or "")[:200]
+            out = (entry.get("output") or "")[:result_cap]
             err = " (ERROR)" if entry.get("is_error") else ""
             lines.append(f"[result]{err} {out}")
         elif kind == "text":
-            lines.append(f"[claude] {(entry.get('text') or '')[:200]}")
+            lines.append(f"[claude] {(entry.get('text') or '')[:text_cap]}")
+        elif kind == "result":
+            lines.append(f"[final-text] {(entry.get('text') or '')[:text_cap]}")
         elif kind == "reviewer":
-            lines.append(f"[reviewer:{entry.get('decision')}] {(entry.get('message') or '')[:200]}")
+            lines.append(f"[reviewer:{entry.get('decision')}] {(entry.get('message') or '')[:300]}")
         elif kind == "hook":
             lines.append(f"[hook:{entry.get('decision')}] {entry.get('tool')} -> {(entry.get('reason') or '')[:120]}")
     return "\n".join(lines) or "(no actions)"
+
+
+def _list_workspace_artifacts(workspace: Path, max_files: int = 8, max_bytes_per_file: int = 8000) -> str:
+    """List interesting artifact files in the workspace and inline their content for the reviewer.
+    Skips skills/, .claude/, hidden dirs, and known build noise."""
+    if not workspace.exists():
+        return "(workspace missing)"
+    skip_dir_names = {"skills", ".claude", ".gradle", ".idea", "build", "node_modules", "__pycache__", "venv", ".venv"}
+    files: list[Path] = []
+    for p in workspace.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(workspace)
+        if any(part in skip_dir_names or part.startswith(".") for part in rel.parts[:-1]):
+            continue
+        if rel.name.startswith("."):
+            continue
+        files.append(p)
+    files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:max_files]
+    if not files:
+        return "(no user-facing artifacts found)"
+    lines = []
+    for p in files:
+        try:
+            size = p.stat().st_size
+            content = p.read_text(errors="replace") if size < 200_000 else "(file too large)"
+            content = content[:max_bytes_per_file]
+            lines.append(f"### {p.relative_to(workspace)} ({size}B)\n```\n{content}\n```")
+        except Exception as e:
+            lines.append(f"### {p.relative_to(workspace)} (read error: {e})")
+    return "\n\n".join(lines)
 
 
 def _parse_escalation(message: str) -> dict:
@@ -77,11 +123,35 @@ class SupervisorLoop:
         self._review_pending: dict | None = None
 
     async def run(self):
+        STORE.set_status(self.task.id, "skilling")
+        STORE.append_log(self.task.id, {"kind": "phase", "phase": "generate_skill"})
+
+        try:
+            skill_md = self.orchestrator.generate_skill_brief(
+                self.task.goal,
+                self.task.clarifications,
+                skill_preview=getattr(self.task, "skill_preview", "") or "",
+            )
+            save_task_skill(str(self.workspace), skill_md)
+            self.task.skill_md = skill_md
+            STORE.append_log(self.task.id, {
+                "kind": "skill_generated",
+                "preview": skill_md[:300],
+                "refined_from_preview": bool(getattr(self.task, "skill_preview", "")),
+            })
+        except Exception as e:
+            STORE.append_log(self.task.id, {"kind": "error", "where": "generate_skill", "msg": str(e)})
+            STORE.set_status(self.task.id, "failed")
+            self.task.result = {"success": False, "error": f"generate_skill failed: {e}"}
+            return
+
         STORE.set_status(self.task.id, "briefing")
         STORE.append_log(self.task.id, {"kind": "phase", "phase": "build_brief"})
 
         try:
-            self.task.brief = self.orchestrator.build_brief(self.task.goal, self.task.clarifications)
+            self.task.brief = self.orchestrator.build_brief(
+                self.task.goal, self.task.clarifications, str(self.workspace)
+            )
         except Exception as e:
             STORE.append_log(self.task.id, {"kind": "error", "where": "build_brief", "msg": str(e)})
             STORE.set_status(self.task.id, "failed")
@@ -129,9 +199,13 @@ class SupervisorLoop:
                     return
 
             STORE.set_status(self.task.id, f"reviewing_loop_{loop_num}")
+            full_log = _summarize_log(self.task.log, limit=300, full_text=True)
+            artifacts = _list_workspace_artifacts(self.workspace)
+            combined = f"{full_log}\n\n=== Workspace artifacts (actual files) ===\n{artifacts}"
             review = self.reviewer.final_review(
                 goal=self.task.goal,
-                action_log=_summarize_log(self.task.log, limit=200),
+                action_log=combined,
+                workspace=str(self.workspace),
             )
             STORE.append_log(self.task.id, {
                 "kind": "final_review",
@@ -142,6 +216,7 @@ class SupervisorLoop:
 
             if review["passed"]:
                 STORE.set_status(self.task.id, "done")
+                self._write_learning(loop_num, review)
                 self.task.result = {
                     "success": True,
                     "summary": review["summary"],
@@ -156,6 +231,7 @@ class SupervisorLoop:
 
             if loop_num == MAX_CORRECTION_LOOPS:
                 STORE.set_status(self.task.id, "failed")
+                self._write_learning(loop_num, review)
                 self.task.result = {
                     "success": False,
                     "best_effort": True,
@@ -185,13 +261,14 @@ class SupervisorLoop:
                 "input": event.tool_input,
             })
 
-            if event.tool_name in REVIEW_TOOLS:
+            if event.tool_name in REVIEW_TOOLS or _is_reviewable_mcp_tool(event.tool_name or ""):
                 try:
                     review = self.reviewer.review_action(
                         goal=self.task.goal,
                         tool_name=event.tool_name or "",
                         tool_input=event.tool_input,
                         recent_actions=_summarize_log(self.task.log, limit=20),
+                        workspace=str(self.workspace),
                     )
                 except Exception as e:
                     review = {"decision": "approve", "message": f"review failed: {e}"}
@@ -256,6 +333,30 @@ class SupervisorLoop:
                 "via": "auto_orchestrator",
             })
             return True
+
+    def _write_learning(self, loop_num: int, review: dict):
+        try:
+            lessons = self.orchestrator.find_promotable_lessons(
+                task=self.task.goal,
+                skill_md=getattr(self.task, "skill_md", "") or "",
+                brief=self.task.brief,
+                action_log_summary=_summarize_log(self.task.log, limit=80),
+                review_summary=review.get("summary", ""),
+                review_issues=review.get("issues", []) or [],
+                passed=bool(review.get("passed")),
+                workspace=str(self.workspace),
+            )
+            if not lessons:
+                STORE.append_log(self.task.id, {"kind": "learning_skipped", "reason": "no promotable lessons"})
+                return
+            added = append_to_global(lessons)
+            STORE.append_log(self.task.id, {
+                "kind": "learning_promoted",
+                "added": added,
+                "lessons": lessons,
+            })
+        except Exception as e:
+            STORE.append_log(self.task.id, {"kind": "learning_error", "msg": str(e)})
 
     def _build_post_escalation_prompt(self) -> str:
         esc = self.task.escalation or {}

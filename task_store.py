@@ -14,6 +14,8 @@ class TaskState:
     clarifications: dict[str, str]
     workspace: str
     status: str = "pending"
+    skill_preview: str = ""
+    skill_md: str = ""
     brief: str = ""
     log: list[dict] = field(default_factory=list)
     corrections: list[str] = field(default_factory=list)
@@ -31,6 +33,7 @@ class TaskState:
             "goal": self.goal,
             "status": self.status,
             "workspace": self.workspace,
+            "skill_md": self.skill_md,
             "brief": self.brief,
             "log_size": len(self.log),
             "log_tail": self.log[-20:],

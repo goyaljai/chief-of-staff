@@ -21,6 +21,29 @@ from task_store import STORE
 app = FastAPI(title="Supervisor V1")
 orchestrator_singleton = Orchestrator()
 
+import hashlib, time as _time
+_SKILL_PREVIEW_CACHE: dict[str, tuple[str, float]] = {}
+_PREVIEW_TTL_SECS = 600
+
+
+def _task_hash(task: str) -> str:
+    return hashlib.sha256(task.strip().encode()).hexdigest()[:16]
+
+
+def _stash_preview(task: str, preview: str):
+    _SKILL_PREVIEW_CACHE[_task_hash(task)] = (preview, _time.time())
+
+
+def _pop_preview(task: str) -> str:
+    h = _task_hash(task)
+    entry = _SKILL_PREVIEW_CACHE.pop(h, None)
+    if not entry:
+        return ""
+    preview, ts = entry
+    if _time.time() - ts > _PREVIEW_TTL_SECS:
+        return ""
+    return preview
+
 
 class TaskQuestionsRequest(BaseModel):
     task: str
@@ -43,10 +66,12 @@ def health():
 
 @app.post("/task/questions")
 def questions(req: TaskQuestionsRequest):
-    qs = orchestrator_singleton.ask_clarifying_questions(req.task)
+    out = orchestrator_singleton.think_and_ask(req.task)
+    _stash_preview(req.task, out["skill_preview"])
     return {
         "task": req.task,
-        "questions": qs,
+        "questions": out["questions"],
+        "skill_preview": out["skill_preview"],
         "next": "Send POST /task/run with {task, clarifications: {q1: a1, ...}} to start.",
     }
 
@@ -59,11 +84,13 @@ async def run(req: TaskRunRequest):
     else:
         state.workspace = str(WORKSPACE_ROOT / state.id)
     Path(state.workspace).mkdir(parents=True, exist_ok=True)
+    state.skill_preview = _pop_preview(req.task)
     asyncio.create_task(run_task(state.id))
     return {
         "task_id": state.id,
         "status": state.status,
         "workspace": state.workspace,
+        "preview_reused": bool(state.skill_preview),
         "next": f"Poll GET /task/{state.id} until status is 'done', 'failed', or 'escalated'.",
     }
 

@@ -12,6 +12,17 @@ Your job is to answer one question: **does what Claude Code did actually achieve
 
 ---
 
+## Inputs you receive
+
+For final review you are given two things and they are both important:
+
+1. **The action log** — every tool call Claude made, with input and output. This is what Claude *did*.
+2. **A `=== Workspace artifacts (actual files) ===` section** — the real files Claude wrote, inlined. This is **ground truth**. The action log can be truncated or summarized; the artifacts section is the actual deliverable.
+
+**Read the artifacts.** Do not judge from the action log alone. If the goal is "produce X" and X exists in the artifacts section with the right content, the work is done — even if the log shows a truncated `cat` output. Conversely, if the artifact is missing, wrong, or empty, the work is not done — even if Claude *says* it ran a successful verification step.
+
+When in doubt, trust the artifact.
+
 ## Two review modes
 
 ### Per-action review

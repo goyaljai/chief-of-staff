@@ -202,6 +202,19 @@ def main():
         decision, reason = decide_write(path, workspace)
     elif tool_name == "Bash":
         decision, reason = decide_bash(tool_input.get("command", ""), workspace)
+    elif tool_name.startswith("mcp__"):
+        if "bash" in tool_name.lower():
+            cmd = (tool_input.get("command") or "")
+            decision, reason = decide_bash(cmd, workspace)
+            if decision == "allow":
+                decision, reason = "allow_unknown", f"MCP bash variant ({tool_name}): supervisor will review"
+        elif any(k in tool_name.lower() for k in ("write", "edit", "create")):
+            path = tool_input.get("file_path") or tool_input.get("path") or ""
+            decision, reason = decide_write(path, workspace)
+            if decision == "allow":
+                decision, reason = "allow_unknown", f"MCP write variant ({tool_name}): supervisor will review"
+        else:
+            decision, reason = "allow_unknown", f"MCP tool {tool_name}: supervisor will review"
     else:
         decision, reason = "allow", f"non-restricted tool: {tool_name}"
 

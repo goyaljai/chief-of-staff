@@ -34,22 +34,22 @@ def install_hooks(workspace: Path, hook_log_path: Path) -> dict:
     settings_dir.mkdir(parents=True, exist_ok=True)
     settings_path = settings_dir / "settings.json"
 
+    hook_command = (
+        f"SUPERVISOR_HOOK_LOG={hook_log_path} "
+        f"SUPERVISOR_WORKSPACE={workspace} "
+        f"python3 {HOOK_SCRIPT}"
+    )
     settings = {
         "hooks": {
             "PreToolUse": [
                 {
                     "matcher": "Bash|Write|Edit|MultiEdit",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": (
-                                f"SUPERVISOR_HOOK_LOG={hook_log_path} "
-                                f"SUPERVISOR_WORKSPACE={workspace} "
-                                f"python3 {HOOK_SCRIPT}"
-                            ),
-                        }
-                    ],
-                }
+                    "hooks": [{"type": "command", "command": hook_command}],
+                },
+                {
+                    "matcher": "mcp__.*",
+                    "hooks": [{"type": "command", "command": hook_command}],
+                },
             ]
         }
     }
@@ -73,6 +73,7 @@ class ClaudeRunner:
         prompt: str,
         session_id: str | None = None,
         on_event: Callable[[ClaudeEvent], None] | None = None,
+        timeout_secs: int = 1200,
     ) -> TaskResult:
         cmd = self._build_command(prompt, session_id)
         events: list[ClaudeEvent] = []
@@ -94,7 +95,20 @@ class ClaudeRunner:
         )
         self._process = process
 
-        async for line in process.stdout:
+        deadline = asyncio.get_event_loop().time() + timeout_secs
+
+        while True:
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(),
+                    timeout=max(1.0, deadline - asyncio.get_event_loop().time()),
+                )
+            except asyncio.TimeoutError:
+                print(f"[runner] timeout after {timeout_secs}s, terminating Claude")
+                self.interrupt()
+                break
+            if not line:
+                break
             raw_line = line.decode(errors="replace").strip()
             if not raw_line:
                 continue
@@ -119,7 +133,11 @@ class ClaudeRunner:
                 except Exception as e:
                     print(f"[runner] on_event raised: {e}")
 
-        await process.wait()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            self.interrupt()
+            await process.wait()
         success = process.returncode == 0
 
         return TaskResult(
