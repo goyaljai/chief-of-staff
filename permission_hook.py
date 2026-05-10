@@ -27,6 +27,67 @@ from pathlib import Path
 ALWAYS_ALLOW_TOOLS = {"Read", "Glob", "Grep", "LS"}
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit"}
 
+# V3.5 D1 Lite: cap individual snapshot entries — beyond this we record only
+# a length + hash, not the content. Avoids ballooning snapshot files when
+# Claude rewrites a 10MB build artifact.
+_MAX_SNAPSHOT_BYTES = 256 * 1024  # 256KB
+
+
+def _maybe_snapshot_for_undo(tool_name: str, tool_input: dict, workspace: str) -> None:
+    """Append a snapshot entry to <workspace>/.cos_snapshots.jsonl for any
+    Write/Edit/MultiEdit (or their MCP equivalents) so /task/{id}/undo can
+    restore the prior state. Best-effort — if anything fails, the hook still
+    allows the tool call (we don't want to break the executor for an undo
+    feature)."""
+    try:
+        if not workspace:
+            return
+        is_write = tool_name in WRITE_TOOLS or (
+            tool_name.startswith("mcp__")
+            and any(k in tool_name.lower() for k in ("write", "edit", "create"))
+        )
+        if not is_write:
+            return
+        path = tool_input.get("file_path") or tool_input.get("path") or ""
+        if not path:
+            return
+        from pathlib import Path as _P
+        p = _P(path)
+        if not p.is_absolute():
+            p = _P(workspace) / path
+        # Confine to workspace — never snapshot anything outside.
+        try:
+            p.resolve().relative_to(_P(workspace).resolve())
+        except (ValueError, OSError):
+            return
+        existed = p.exists()
+        original = ""
+        truncated = False
+        size = 0
+        if existed:
+            try:
+                size = p.stat().st_size
+                if size <= _MAX_SNAPSHOT_BYTES:
+                    original = p.read_text(errors="replace")
+                else:
+                    truncated = True
+            except Exception:
+                truncated = True
+        snap = {
+            "ts": time.time(),
+            "tool": tool_name,
+            "path": str(p),
+            "originally_existed": existed,
+            "original_size": size,
+            "original": "" if truncated else original,
+            "truncated": truncated,
+        }
+        snap_path = _P(workspace) / ".cos_snapshots.jsonl"
+        with open(snap_path, "a") as f:
+            f.write(json.dumps(snap) + "\n")
+    except Exception as e:
+        sys.stderr.write(f"hook: snapshot capture failed (non-fatal): {e}\n")
+
 BASH_ALWAYS_ALLOW_PREFIXES = (
     "ls", "pwd", "cat", "echo", "head", "tail", "wc",
     "find", "grep", "rg", "tree", "file", "stat",
@@ -217,6 +278,12 @@ def main():
             decision, reason = "allow_unknown", f"MCP tool {tool_name}: supervisor will review"
     else:
         decision, reason = "allow", f"non-restricted tool: {tool_name}"
+
+    # V3.5 D1 Lite: snapshot the original file content for any allowed write
+    # so /task/{id}/undo can restore. Skip blocked ops (no mutation incoming)
+    # and only handle Write/Edit/MultiEdit + their MCP equivalents.
+    if decision != "block":
+        _maybe_snapshot_for_undo(tool_name, tool_input, workspace)
 
     log_decision({
         "ts": time.time(),

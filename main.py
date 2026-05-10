@@ -496,6 +496,85 @@ def add_note(task_id: str, body: NoteRequest):
     return {"ok": True, "queued_for_next_loop": True, "notes_pending": len(state.user_notes)}
 
 
+_MAX_UNDO_FILES = 500  # safety cap
+
+
+@app.post("/task/{task_id}/undo")
+def undo_task(task_id: str):
+    """V3.5 D1 Lite: restore the workspace to its pre-task state by replaying
+    .cos_snapshots.jsonl in reverse:
+      - originally_existed=False → delete the file (it was created by Claude)
+      - originally_existed=True  → write the original content back
+    Truncated entries (file >256KB at snapshot time) are skipped with a note —
+    we can't restore content we didn't capture, so we leave those files alone."""
+    state = STORE.get(task_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="task not found")
+    ws = Path(state.workspace) if state.workspace else None
+    if not ws or not ws.exists():
+        raise HTTPException(status_code=400, detail="workspace not found on disk")
+    snap_file = ws / ".cos_snapshots.jsonl"
+    if not snap_file.exists():
+        return {"ok": True, "restored": 0, "deleted": 0, "skipped": 0,
+                "reason": "no snapshots — nothing to undo"}
+    entries: list[dict] = []
+    for line in snap_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            continue
+    if len(entries) > _MAX_UNDO_FILES:
+        # Defensive — large undos run on the request thread.
+        raise HTTPException(
+            status_code=400,
+            detail=f"too many snapshot entries ({len(entries)}; max {_MAX_UNDO_FILES})",
+        )
+    # Walk in reverse, dedupe by path (only the FIRST snapshot per path matters
+    # since that captures the truly-original state before any mutation).
+    seen: set = set()
+    chronological_originals: list[dict] = []
+    for entry in entries:
+        p = entry.get("path", "")
+        if p and p not in seen:
+            seen.add(p)
+            chronological_originals.append(entry)
+    restored = 0
+    deleted = 0
+    skipped = 0
+    errors: list[str] = []
+    for entry in chronological_originals:
+        path = Path(entry.get("path", ""))
+        try:
+            if entry.get("truncated"):
+                skipped += 1
+                continue
+            if entry.get("originally_existed"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry.get("original", ""))
+                restored += 1
+            else:
+                if path.exists():
+                    if path.is_file():
+                        path.unlink()
+                        deleted += 1
+                    elif path.is_dir():
+                        # File path was actually a dir? Skip.
+                        skipped += 1
+        except Exception as e:
+            errors.append(f"{path}: {e}")
+            skipped += 1
+    STORE.append_log(task_id, {
+        "kind": "undo",
+        "restored": restored, "deleted": deleted, "skipped": skipped,
+        "ts": time.time(),
+    })
+    return {"ok": True, "restored": restored, "deleted": deleted,
+            "skipped": skipped, "errors": errors[:5]}
+
+
 @app.post("/task/{task_id}/resume")
 async def resume_task(task_id: str):
     """V3 #3: resume an interrupted task (one that was in-flight when server restarted)."""

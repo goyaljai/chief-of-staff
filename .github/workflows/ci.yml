@@ -77,6 +77,9 @@ jobs:
       - name: F1 graceful shutdown regression
         run: python eval/test_f1_shutdown.py
 
+      - name: D1 Lite undo regression (snapshot + restore)
+        run: python eval/test_d1_undo.py
+
       - name: DAG executor parallel/topology tests
         run: python eval/test_dag_parallel.py
 
