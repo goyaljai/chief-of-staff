@@ -1,6 +1,30 @@
 {
-  "version": 1,
-  "description": "Reference evaluation suite for chief-of-staff orchestrator. Run regularly to track quality.",
+  "version": 2,
+  "description": "V3.5 expanded eval suite. 16 fast + 4 slow. Fast tasks form the CI subset; the full suite runs on demand.",
+  "fast_ids": [
+    "build-py-cli-calc",
+    "research-mango-list",
+    "research-postgres-vs-sqlite",
+    "writing-product-spec",
+    "research-best-typed-langs",
+    "writing-launch-blog",
+    "writing-incident-postmortem",
+    "data-csv-to-md",
+    "data-extract-emails",
+    "ops-cron-template",
+    "ops-systemd-unit",
+    "code-fix-typo",
+    "code-fizzbuzz",
+    "code-anagram-checker",
+    "code-shell-script-summary",
+    "research-rate-limit-strategies"
+  ],
+  "slow_ids": [
+    "build-android-helloworld",
+    "code-rest-api-flask",
+    "ops-multi-step-deploy-dag",
+    "data-elt-pipeline-dag"
+  ],
   "tasks": [
     {
       "id": "build-py-cli-calc",
@@ -51,6 +75,151 @@
       "expected": {
         "deliverable_files": [".*\\.md$"],
         "should_pass_review": true
+      }
+    },
+    {
+      "id": "research-best-typed-langs",
+      "task": "list 5 popular gradually-typed languages with one-line strengths",
+      "clarifications": {"format": "markdown table", "lens": "popularity 2025"},
+      "expected": {
+        "deliverable_files": [".*\\.md$"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "writing-launch-blog",
+      "task": "Write a 250-word launch blog announcing a new file-share product called Folio. Tone: confident, plain English.",
+      "clarifications": {"format": "markdown", "audience": "developers"},
+      "expected": {
+        "deliverable_files": [".*\\.md$"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "writing-incident-postmortem",
+      "task": "Draft an incident postmortem for a 47-min outage caused by a runaway DB migration. Include timeline, root cause, mitigations.",
+      "clarifications": {"format": "markdown", "tone": "blameless"},
+      "expected": {
+        "deliverable_files": [".*postmortem.*\\.md$|.*\\.md$"],
+        "should_pass_review": true,
+        "summary_must_mention": ["root cause"]
+      }
+    },
+    {
+      "id": "data-csv-to-md",
+      "task": "Convert this CSV (3 cols: name, region, score) into a sorted markdown table by score desc. Source data: alice,IN,87 / bob,US,92 / carlos,BR,78. Output table.md.",
+      "clarifications": {"deliverable": "table.md", "sort": "score desc"},
+      "expected": {
+        "deliverable_files": ["table.md"],
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "data-extract-emails",
+      "task": "Write extract_emails.py — given a string, return all email addresses (RFC-5322-loose). Include a __main__ self-test that prints results for one sample.",
+      "clarifications": {"deliverable": "extract_emails.py", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["extract_emails.py"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "ops-cron-template",
+      "task": "Produce a cron entry that runs /usr/local/bin/healthcheck.sh every 5 minutes, redirects stdout+stderr to /var/log/healthcheck.log, and a one-line README explaining it. Output cron.txt and README.md.",
+      "clarifications": {"deliverables": "cron.txt + README.md"},
+      "expected": {
+        "deliverable_files": ["cron.txt", "README.md"],
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "ops-systemd-unit",
+      "task": "Write a systemd .service file for a Python web service at /opt/myapp/server.py running as user 'myapp'. Restart=on-failure. Output myapp.service and a one-paragraph install note.",
+      "clarifications": {"format": "ini-style systemd unit + markdown note"},
+      "expected": {
+        "deliverable_files": ["myapp.service"],
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "code-fix-typo",
+      "task": "Create greet.py with a function `greet(name)` that returns 'Hello, <name>'. Trivial — single file, ~5 lines.",
+      "clarifications": {"deliverable": "greet.py"},
+      "expected": {
+        "deliverable_files": ["greet.py"],
+        "should_pass_review": true,
+        "max_loops": 1
+      }
+    },
+    {
+      "id": "code-fizzbuzz",
+      "task": "Write fizzbuzz.py that prints 1..30 with Fizz/Buzz/FizzBuzz rules. Stdlib only. Run it and show its output in the action log.",
+      "clarifications": {"deliverable": "fizzbuzz.py"},
+      "expected": {
+        "deliverable_files": ["fizzbuzz.py"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "code-anagram-checker",
+      "task": "Write anagrams.py with `is_anagram(a, b) -> bool` and a __main__ self-test for ('listen','silent') -> True and ('hello','world') -> False. Output must show both test results in the action log.",
+      "clarifications": {"deliverable": "anagrams.py", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["anagrams.py"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "code-shell-script-summary",
+      "task": "Read /etc/hostname and /etc/os-release if available, write a one-paragraph host_summary.md describing the host. Use a tiny POSIX shell script summary.sh that produces the markdown.",
+      "clarifications": {"deliverables": "summary.sh + host_summary.md"},
+      "expected": {
+        "deliverable_files": ["summary.sh", "host_summary.md"],
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "research-rate-limit-strategies",
+      "task": "Compare token bucket, leaky bucket, and fixed-window rate limiting in 1 paragraph each. Output rate_limits.md.",
+      "clarifications": {"deliverable": "rate_limits.md"},
+      "expected": {
+        "deliverable_files": ["rate_limits.md"],
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "code-rest-api-flask",
+      "task": "Build a Flask REST API at app.py with endpoints GET /items, POST /items, GET /items/<id>, DELETE /items/<id>. In-memory store. Include a tests.py with at least 2 happy-path tests using Flask's test_client. Run the tests and show output.",
+      "clarifications": {"deliverable": "app.py + tests.py"},
+      "expected": {
+        "deliverable_files": ["app.py", "tests.py"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "ops-multi-step-deploy-dag",
+      "task": "Create a release plan for shipping a service: STEP build (compile artifact), STEP lint (run linter), STEP test (run unit tests), STEP package (create tar.gz), STEP deploy (write a deploy.sh that copies tar.gz to remote). build/lint can run in parallel; test depends on build; package depends on lint+test; deploy depends on package. Each step is a real script the next step depends on. Use the Steps section of the brief if your supervisor supports parallel execution.",
+      "clarifications": {"deliverables": "build.sh + lint.sh + test.sh + package.sh + deploy.sh", "expect_dag": "yes"},
+      "expected": {
+        "deliverable_files": ["build.sh", "lint.sh", "test.sh", "package.sh", "deploy.sh"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "data-elt-pipeline-dag",
+      "task": "Build an ELT pipeline scaffold. STEP extract (fetch.py reads a sample CSV), STEP transform (transform.py normalizes columns), STEP load (load.py writes JSON). transform depends on extract; load depends on transform. Include a runner.sh that runs all three in order. Run it once and show output.",
+      "clarifications": {"deliverables": "fetch.py + transform.py + load.py + runner.sh"},
+      "expected": {
+        "deliverable_files": ["fetch.py", "transform.py", "load.py", "runner.sh"],
+        "should_pass_review": true,
+        "max_loops": 3
       }
     }
   ]

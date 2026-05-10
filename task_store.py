@@ -49,7 +49,8 @@ class TaskState:
             "skill_description": self.skill_description,
             "brief": self.brief,
             "log_size": len(self.log),
-            "log_tail": self.log[-30:],
+            "log_tail": _build_log_tail(self.log),
+            "dag_progress": _build_dag_progress(self.log),
             "claude_plan": self.claude_plan,
             "corrections": self.corrections,
             "escalation": self.escalation,
@@ -63,6 +64,54 @@ class TaskState:
                 "claude_usd": round(self.cost_claude_usd, 4),
             },
         }
+
+
+# ---------- V3.5 E7: smart log_tail + dag_progress ----------
+
+_LOG_TAIL_MAX = 60
+_LOG_TAIL_STEP_PER_ID = 5
+_LOG_TAIL_WINDOW = 250
+
+
+def _build_log_tail(log: list[dict]) -> list[dict]:
+    """Build a 60-entry tail that keeps ALL recent non-step events plus at most
+    5 dag_step_event entries per step_id. Without this, a long DAG run floods
+    log_tail with step events and the UI loses signal (phase/correction/error
+    entries get pushed out of the visible window and the page lags)."""
+    if len(log) <= _LOG_TAIL_MAX:
+        return list(log)
+    window = log[-_LOG_TAIL_WINDOW:]
+    keep: list[dict] = []
+    step_count: dict[str, int] = {}
+    for e in reversed(window):
+        if e.get("kind") == "dag_step_event" and e.get("step_id"):
+            sid = e["step_id"]
+            if step_count.get(sid, 0) >= _LOG_TAIL_STEP_PER_ID:
+                continue
+            step_count[sid] = step_count.get(sid, 0) + 1
+            keep.append(e)
+        else:
+            keep.append(e)
+        if len(keep) >= _LOG_TAIL_MAX:
+            break
+    keep.reverse()
+    return keep
+
+
+def _build_dag_progress(log: list[dict]) -> dict:
+    """Per-step summary: count of events, last event text, first-seen ts.
+    Cheap structured field for the dashboard list view ("step 2/3: building")
+    so the UI doesn't have to walk the log to figure out per-step state."""
+    progress: dict[str, dict] = {}
+    for e in log:
+        if e.get("kind") == "dag_step_event" and e.get("step_id"):
+            sid = e["step_id"]
+            p = progress.setdefault(sid, {"count": 0, "started_at": e.get("ts"), "last": ""})
+            p["count"] += 1
+            t = e.get("text") or e.get("tool") or ""
+            if t:
+                p["last"] = str(t)[:160]
+    return progress
 
 
 class TaskStore:
@@ -132,7 +181,14 @@ class TaskStore:
         s = self._tasks.get(tid)
         if not s or s.status != "escalated":
             return False
-        s.escalation_answer = answer.lower().strip()
+        # V3.5 D5 fix: only lowercase the legacy 1-char a/b answers; preserve
+        # case for free-text directives (URLs, file paths, identifiers etc.
+        # were getting mangled — "Use HTTPS" → "use https").
+        stripped = (answer or "").strip()
+        if len(stripped) <= 2:
+            s.escalation_answer = stripped.lower()
+        else:
+            s.escalation_answer = stripped
         s.escalation_event.set()
         return True
 
@@ -149,7 +205,10 @@ class TaskStore:
         self._subscribers.setdefault(tid, []).append(q)
         s = self._tasks.get(tid)
         if s:
-            for entry in s.log[-30:]:
+            # V3.5 round-3 fix #9: use the smart log_tail (drops dag_step_event
+            # flood) so new SSE clients don't get spammed with 30 step events
+            # and miss the actual phase / final_review / correction signal.
+            for entry in _build_log_tail(s.log):
                 try:
                     q.put_nowait(entry)
                 except asyncio.QueueFull:
@@ -169,12 +228,26 @@ class TaskStore:
 
     def cancel(self, tid: str) -> bool:
         runner = self._runners.get(tid)
-        if not runner:
-            return False
+        interrupted_any = False
+        if runner is not None:
+            try:
+                runner.interrupt()
+                interrupted_any = True
+            except Exception:
+                pass
+        # V3.5 audit fix: also interrupt every live DAG step runner. Without
+        # this, /cancel returned ok=True while parallel subprocesses kept
+        # running because the supervisor's `self.runner` wasn't the one in use.
         try:
-            runner.interrupt()
-        except Exception:
-            pass
+            import dag_executor
+            n = dag_executor.interrupt_all_for(tid)
+            if n:
+                interrupted_any = True
+                print(f"[cancel] interrupted {n} DAG step runners for {tid}")
+        except Exception as e:
+            print(f"[cancel] dag interrupt error: {e}")
+        if not interrupted_any:
+            return False
         self.append_log(tid, {"kind": "cancelled", "ts": time.time()})
         self.set_status(tid, "cancelled")
         return True
@@ -192,6 +265,19 @@ class TaskStore:
         except Exception:
             return
         import json as _json
+
+        def _as_obj(v, default):
+            # psycopg2 returns JSONB columns already-parsed (dict/list).
+            # Be defensive in case the column comes back as a string.
+            if v is None or v == "":
+                return default
+            if isinstance(v, (dict, list)):
+                return v
+            try:
+                return _json.loads(v)
+            except Exception:
+                return default
+
         for r in rows:
             if r["id"] in self._tasks:
                 continue
@@ -202,14 +288,14 @@ class TaskStore:
             state = TaskState(
                 id=row["id"],
                 goal=row["goal"] or "",
-                clarifications=_json.loads(row["clarifications"]) if row["clarifications"] else {},
+                clarifications=_as_obj(row["clarifications"], {}),
                 workspace=row["workspace"] or "",
                 status=row["status"] or "unknown",
                 skill_md=row["skill_md"] or "",
                 skill_name=row["skill_name"] or "",
                 skill_description=row["skill_description"] or "",
                 brief=row["brief"] or "",
-                result=_json.loads(row["result"]) if row["result"] else None,
+                result=_as_obj(row["result"], None),
                 started_at=row["started_at"] or time.time(),
                 finished_at=row["finished_at"],
                 cost_databricks_in=row["cost_databricks_in"] or 0,
@@ -218,11 +304,9 @@ class TaskStore:
                 keep_workspace=bool(row["keep_workspace"]),
             )
             for l in full["logs"][-100:]:
-                try:
-                    p = _json.loads(l["payload"])
+                p = _as_obj(l["payload"], None)
+                if p is not None:
                     state.log.append(p)
-                except Exception:
-                    pass
             in_flight = state.status in (
                 "pending", "skilling", "briefing",
                 "executing_loop_1", "executing_loop_2", "executing_loop_3",

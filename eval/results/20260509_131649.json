@@ -1,0 +1,29 @@
+{
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "error": 0,
+    "pass_rate": 0.0
+  },
+  "results": [
+    {
+      "id": "build-android-helloworld",
+      "task_id": "a1198bed17fe",
+      "status": "done",
+      "duration_secs": 278.2,
+      "cost": {
+        "databricks_input_tokens": 155149,
+        "databricks_output_tokens": 4649,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "FAIL",
+      "checks": {
+        "deliverable_files": false,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    }
+  ]
+}

@@ -16,7 +16,14 @@ import json
 import re
 from pathlib import Path
 
-from openai import OpenAI
+import db
+from openai import (
+    OpenAI,
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from config import (
     DATABRICKS_BASE_URL,
@@ -76,13 +83,36 @@ def _load_prompt(name: str) -> str:
     return (PROMPTS_DIR / f"{name}.md").read_text()
 
 
+_LEARNED_SECTION_CHAR_BUDGET = 8000  # ≈ 2k tokens; tune as skills grow.
+
+
 def _load_skills(workspace: str | Path | None = None, inline_skill: str = "") -> str:
     parts: list[str] = []
     if GLOBAL_SKILL_PATH.exists():
-        parts.append(f"## Global skills (universal patterns)\n\n{GLOBAL_SKILL_PATH.read_text()}")
+        text = GLOBAL_SKILL_PATH.read_text()
+        text = _truncate_learned_section(text, _LEARNED_SECTION_CHAR_BUDGET)
+        parts.append(f"## Global skills (universal patterns)\n\n{text}")
     if inline_skill:
         parts.append(f"## Skill brief for THIS task (your private playbook)\n\n{inline_skill}")
     return "\n\n---\n\n".join(parts)
+
+
+def _truncate_learned_section(text: str, char_budget: int) -> str:
+    """Keep the hand-written prelude intact; cap only the Learned section so
+    prompt size doesn't grow unbounded as skill_lessons accumulates. Because
+    the Learned section is sorted by frequency desc, truncation drops the
+    least-impactful (lowest-frequency) entries first — exactly what we want."""
+    if LEARNED_HEADER not in text:
+        return text
+    prelude, _, learned = text.partition(LEARNED_HEADER)
+    if len(learned) <= char_budget:
+        return text
+    head = learned[:char_budget]
+    # Don't cut a bullet mid-line.
+    cut = head.rfind("\n- ")
+    if cut > 0:
+        head = head[:cut]
+    return prelude + LEARNED_HEADER + head + "\n\n_…older low-frequency lessons omitted to fit prompt budget…_\n"
 
 
 import contextvars
@@ -105,8 +135,27 @@ def _chat(system: str, user: str, max_tokens: int = 2048, skills_context: str = 
             f"{skills_context}"
         )
 
+    # V3.5 F5: production-grade retry — explicit OpenAI exception types (more
+    # robust than substring matching on the error message) + jittered backoff
+    # so synchronized retries don't pile onto the gateway. 4 attempts total
+    # with 1s/2s/4s base delays + 0-1s jitter ≈ up to ~10s total wait.
+    import random
+    import time as _time
+    transient_excs = (
+        RateLimitError,           # 429 from gateway
+        APIConnectionError,       # network blip / DNS / reset
+        APITimeoutError,          # client-side timeout
+        InternalServerError,      # 5xx
+    )
+    transient_substrings = (
+        # Belt-and-braces: providers occasionally raise generic Exception
+        # before the SDK has classified it. Keep these as a fallback.
+        "rate limit", "rate_limit", "429",
+        "503", "502", "504", "timeout", "timed out",
+        "connection", "temporary", "overloaded",
+    )
     last_err: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             response = _client().chat.completions.create(
                 model=DATABRICKS_MODEL,
@@ -126,20 +175,19 @@ def _chat(system: str, user: str, max_tokens: int = 2048, skills_context: str = 
             except Exception:
                 pass
             return response.choices[0].message.content or ""
+        except transient_excs as e:
+            last_err = e
+            transient = True
         except Exception as e:
             last_err = e
-            err_str = str(e).lower()
-            transient = any(s in err_str for s in (
-                "rate limit", "rate_limit", "429",
-                "503", "502", "504", "timeout", "timed out",
-                "connection", "temporary", "overloaded",
-            ))
-            if not transient or attempt == 2:
-                raise
-            wait = 2 ** (attempt + 1)
-            print(f"[orchestrator] transient Databricks error (attempt {attempt+1}): {e}. retrying in {wait}s")
-            import time as _time
-            _time.sleep(wait)
+            transient = any(s in str(e).lower() for s in transient_substrings)
+        if not transient or attempt == 3:
+            raise last_err
+        base = 2 ** attempt  # 1, 2, 4, 8
+        wait = base + random.uniform(0, 1.0)
+        kind = type(last_err).__name__
+        print(f"[orchestrator] transient {kind} (attempt {attempt+1}/4): {last_err}. retrying in {wait:.1f}s")
+        _time.sleep(wait)
     if last_err:
         raise last_err
     return ""
@@ -159,37 +207,144 @@ def _extract_json(text: str) -> dict:
         return {}
 
 
-def append_to_global(lessons: list[str]) -> int:
-    """Append lessons to skills/global.md under the Learned section. Dedupes. Caps at MAX_LEARNED_ENTRIES."""
+_LEARNED_INTRO = (
+    "_(Sorted by frequency across runs — patterns hit more often appear first. "
+    "`[×N]` shows how many tasks have promoted this lesson.)_"
+)
+_FREQ_TAG_RE = re.compile(r"^\[×\d+\]\s*")
+
+
+def append_to_global(
+    lessons: list,
+    origin_task_id: str | None = None,
+    domains: list[str] | None = None,
+) -> int:
+    """V3.5 B2: UPSERT each lesson into Postgres skill_lessons (dedupe by hash,
+    increment frequency on duplicates), then re-render skills/global.md so the
+    Learned section is sorted by frequency desc.
+
+    `lessons` may be a list of strings (legacy) OR a list of dicts of shape
+    `{"pattern": str, "remediation": str?, "domains": list[str]?}`. Strings
+    use the caller-level `domains` kwarg. Dicts override per-entry.
+
+    Returns the count of NEWLY-ADDED lessons (duplicates that bumped frequency
+    do not count — that's the contract callers expect)."""
     if not lessons:
         return 0
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    existing = GLOBAL_SKILL_PATH.read_text() if GLOBAL_SKILL_PATH.exists() else "# Global skills\n\n"
-
-    if LEARNED_HEADER not in existing:
-        existing = existing.rstrip() + f"\n\n{LEARNED_HEADER}\n\n"
-
-    head, _, tail = existing.partition(LEARNED_HEADER)
-    learned_section = (LEARNED_HEADER + tail).strip()
-    lines = [l for l in learned_section.splitlines() if l.startswith("- ")]
-    seen = set(lines)
     added = 0
-    for l in lessons:
-        clean = l.strip().lstrip("-").strip()
-        if not clean:
+    for raw in lessons:
+        if isinstance(raw, dict):
+            pattern = (raw.get("pattern") or "").strip().lstrip("-").strip()
+            entry_domains = list(raw.get("domains") or domains or [])
+            remediation = (raw.get("remediation") or "").strip() or None
+        else:
+            pattern = str(raw).strip().lstrip("-").strip()
+            entry_domains = list(domains or [])
+            remediation = None
+        pattern = _FREQ_TAG_RE.sub("", pattern)
+        if not pattern:
             continue
-        new_line = f"- {clean}"
-        if new_line in seen:
-            continue
-        lines.append(new_line)
-        seen.add(new_line)
-        added += 1
-    if len(lines) > MAX_LEARNED_ENTRIES:
-        lines = lines[-MAX_LEARNED_ENTRIES:]
-
-    rebuilt = head.rstrip() + "\n\n" + LEARNED_HEADER + "\n\n" + "\n".join(lines) + "\n"
-    GLOBAL_SKILL_PATH.write_text(rebuilt)
+        try:
+            _, _, was_new = db.upsert_skill_lesson(
+                pattern,
+                origin_task_id=origin_task_id,
+                domains=entry_domains,
+                remediation=remediation,
+            )
+            if was_new:
+                added += 1
+        except Exception as e:
+            print(f"[append_to_global] skill_lessons upsert failed: {e}")
+    try:
+        _rerender_global_md()
+    except Exception as e:
+        print(f"[append_to_global] re-render failed: {e}")
     return added
+
+
+def _rerender_global_md() -> None:
+    """Rebuild skills/global.md = preserved hand-written prelude + LEARNED_HEADER
+    + DB-backed bullets sorted by frequency desc.
+
+    The hand-written prelude (verification rules, scope discipline, etc.) is
+    NEVER touched — only everything below LEARNED_HEADER is regenerated."""
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    existing = GLOBAL_SKILL_PATH.read_text() if GLOBAL_SKILL_PATH.exists() else "# Global skills\n\n"
+    if LEARNED_HEADER in existing:
+        prelude, _, _ = existing.partition(LEARNED_HEADER)
+    else:
+        prelude = existing
+    prelude = prelude.rstrip() + "\n\n"
+
+    lessons = db.list_skill_lessons(limit=MAX_LEARNED_ENTRIES)
+    if not lessons:
+        body = "_(no lessons yet)_\n"
+    else:
+        bullets = []
+        for entry in lessons:
+            f = entry["frequency"]
+            tag = f"[×{f}] " if f > 1 else ""
+            line = f"- {tag}{entry['pattern']}"
+            domains = entry.get("domains") or []
+            if domains:
+                line += f"  _(applies_to: {', '.join(domains)})_"
+            remediation = (entry.get("remediation") or "").strip()
+            if remediation:
+                # Indented sub-bullet so the LLM reading the prompt clearly
+                # associates the fix with its rule.
+                line += f"\n  - **fix:** {remediation}"
+            bullets.append(line)
+        body = _LEARNED_INTRO + "\n\n" + "\n".join(bullets) + "\n"
+
+    # Atomic write — concurrent learning_promoted events otherwise race the
+    # read/partition/write sequence and can leave skills/global.md half-written.
+    import os as _os
+    final = prelude + LEARNED_HEADER + "\n\n" + body
+    tmp = GLOBAL_SKILL_PATH.with_suffix(".md.tmp")
+    tmp.write_text(final)
+    _os.replace(tmp, GLOBAL_SKILL_PATH)
+
+
+def bootstrap_skill_lessons_from_md() -> int:
+    """One-time migration: import existing global.md learned bullets into the
+    skill_lessons table if the table is empty. Each line becomes frequency=1.
+    Safe to call on every startup — no-op when DB is already populated."""
+    try:
+        if db.count_skill_lessons() > 0:
+            return 0
+    except Exception as e:
+        print(f"[bootstrap] cannot read skill_lessons: {e}")
+        return 0
+    if not GLOBAL_SKILL_PATH.exists():
+        return 0
+    text = GLOBAL_SKILL_PATH.read_text()
+    if LEARNED_HEADER not in text:
+        return 0
+    _, _, tail = text.partition(LEARNED_HEADER)
+    # V3.5 round-3 fix #12: only top-level bullets are patterns. Skip indented
+    # sub-bullets like "  - **fix:** ..." (remediation) — bootstrapping those
+    # as patterns corrupts the lessons table after a wipe + re-import cycle.
+    lines = [l.strip() for l in tail.splitlines() if l.startswith("- ")]
+    imported = 0
+    for line in lines:
+        pat = line.lstrip("-").strip()
+        pat = _FREQ_TAG_RE.sub("", pat)
+        if not pat:
+            continue
+        try:
+            _, _, was_new = db.upsert_skill_lesson(pat)
+            if was_new:
+                imported += 1
+        except Exception as e:
+            print(f"[bootstrap] {e}")
+    if imported:
+        try:
+            _rerender_global_md()
+        except Exception as e:
+            print(f"[bootstrap] re-render failed: {e}")
+    print(f"[bootstrap] imported {imported} lessons from global.md into skill_lessons")
+    return imported
 
 
 def save_task_skill(workspace: str | Path, skill_md: str) -> Path | None:
@@ -306,20 +461,43 @@ class Orchestrator:
         return _chat(self.system, user, max_tokens=3500, skills_context=skills).strip()
 
     def parse_dag(self, brief: str) -> list[dict] | None:
-        """V3 #6: parse a DAG out of the brief if the brief has a 'Steps' section.
-        Each step has id, action, depends_on (list). Returns None if brief is plain prose.
-        Used by V3 #7 to fan out independent steps."""
+        """Parse the optional `## Steps` section into DAG step dicts.
+
+        Accepted line forms (annotation block at end is optional; key:value
+        pairs separated by `;`):
+            - id: action
+            - id: action (deps: a, b)
+            - id: action (timeout: 1800)
+            - id: action (deps: a, b; timeout: 1800)
+        """
         import re as _re
         m = _re.search(r"##\s+(?:Steps|DAG|Plan)\s*\n(.*?)(?:\n##\s|\Z)", brief, _re.IGNORECASE | _re.DOTALL)
         if not m:
             return None
         body = m.group(1)
-        steps = []
+        steps: list[dict] = []
+        line_re = _re.compile(r"^\s*[-*]?\s*([A-Za-z0-9_\-]+):\s*(.+?)\s*(?:\(([^)]*)\))?\s*$")
         for line in body.splitlines():
-            mm = _re.match(r"^\s*[-*]?\s*([A-Za-z0-9_\-]+):\s*(.+?)(?:\s*\(deps?:\s*([^)]*)\))?\s*$", line)
-            if mm:
-                deps = [d.strip() for d in (mm.group(3) or "").split(",") if d.strip()]
-                steps.append({"id": mm.group(1), "action": mm.group(2).strip(), "depends_on": deps})
+            mm = line_re.match(line)
+            if not mm:
+                continue
+            sid, action, annot = mm.group(1), mm.group(2).strip(), mm.group(3)
+            step: dict = {"id": sid, "action": action, "depends_on": []}
+            if annot:
+                for piece in annot.split(";"):
+                    piece = piece.strip()
+                    if not piece or ":" not in piece:
+                        continue
+                    key, _, val = piece.partition(":")
+                    key, val = key.strip().lower(), val.strip()
+                    if key in ("dep", "deps"):
+                        step["depends_on"] = [d.strip() for d in val.split(",") if d.strip()]
+                    elif key == "timeout":
+                        try:
+                            step["timeout_secs"] = max(60, int(val))
+                        except ValueError:
+                            pass
+            steps.append(step)
         return steps or None
 
     def build_brief(self, task: str, clarifications: dict[str, str], workspace: str, inline_skill: str = "") -> str:
@@ -341,6 +519,22 @@ class Orchestrator:
             "- Recommended implementation shape (only if useful)\n\n"
             "Be explicit about deliverable files. The executor's job is to produce those files. "
             "The workspace will be empty when the executor starts — anything it should produce, name it explicitly.\n\n"
+            "PARALLEL DAG (optional, only when warranted):\n"
+            "If the task decomposes into 2+ steps that can run independently AND each step "
+            "produces a distinct artifact (e.g. compile vs lint, fetch vs transform vs load, "
+            "build N independent files), append a final section formatted EXACTLY:\n\n"
+            "## Steps\n"
+            "- step_id_1: short imperative action sentence\n"
+            "- step_id_2: short imperative action sentence (deps: step_id_1)\n"
+            "- step_id_3: heavier action sentence (deps: step_id_1; timeout: 1800)\n\n"
+            "Rules:\n"
+            "- Step IDs MUST match `[A-Za-z0-9_-]{1,64}` (no spaces, no slashes, no dots).\n"
+            "- Annotation block `(...)` is optional; pairs separated by `;`.\n"
+            "  - `deps: a, b` → dependencies (defaults to none).\n"
+            "  - `timeout: N` → seconds, only set when a step is genuinely long-running (build, install, large compile). Default is 600s.\n"
+            "- Each step's action becomes a SEPARATE Claude Code subprocess in the SAME workspace directory.\n"
+            "- Do NOT emit `## Steps` for tasks that are inherently single-shot (one file, one essay, one analysis). "
+            "Emit it only when 2+ steps are genuinely independent or when there's a clear topological order with parallel branches.\n\n"
             "Output markdown only, no preamble."
         )
         return _chat(self.system, user, max_tokens=4096, skills_context=skills).strip()
@@ -450,18 +644,27 @@ class Orchestrator:
             f"Action log summary:\n{action_log_summary[:2000]}\n\n"
             f"Review summary: {review_summary}\n"
             f"Issues caught:\n{issues_text}\n\n"
-            "Output JSON: {\"lessons\": [\"...\", \"...\"]}.\n"
+            "Output JSON: {\"lessons\": [{\"pattern\": \"...\", \"remediation\": \"...\", \"domains\": [\"code\"|\"research\"|\"data\"|\"ops\"|\"writing\"]}, ...]}.\n"
             "Each lesson:\n"
-            "  - One sentence\n"
-            "  - Actionable for a future reviewer/orchestrator\n"
-            "  - General — applies to a DIFFERENT task, not just a similar one\n"
-            "  - NOT already in the global skills above\n"
-            "Empty list is the right answer most of the time."
+            "  - `pattern` (required): one sentence, actionable rule for a future reviewer/orchestrator. General — applies to a DIFFERENT task, not just a similar one. NOT already in the global skills above.\n"
+            "  - `remediation` (optional but encouraged): one sentence telling the executor HOW to satisfy the rule when it kicks in.\n"
+            "  - `domains` (optional): which task types this applies to, from {code, research, data, ops, writing}. Empty list = universal.\n"
+            "Empty `lessons` list is the right answer most of the time."
         )
         raw = _chat(self.system, user, max_tokens=1024, skills_context=skills)
         data = _extract_json(raw)
         lessons = data.get("lessons") or []
-        return [l.strip() for l in lessons if isinstance(l, str) and l.strip()][:3]
+        out: list = []
+        for l in lessons:
+            if isinstance(l, str) and l.strip():
+                out.append(l.strip())  # legacy bare-string fallback
+            elif isinstance(l, dict) and (l.get("pattern") or "").strip():
+                out.append({
+                    "pattern": str(l["pattern"]).strip(),
+                    "remediation": (l.get("remediation") or "").strip() or None,
+                    "domains": [d for d in (l.get("domains") or []) if isinstance(d, str)],
+                })
+        return out[:3]
 
 
     def answer_from_history(self, question: str, retrieved: list[dict]) -> dict:

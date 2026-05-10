@@ -33,16 +33,12 @@ Reject these as "done":
 
 ## Learned from past runs
 
-- When tool output is truncated, require the executor to rerun narrower or chunked commands that make the complete deliverable and each claimed check fully visible in the log.
-- For small structured outputs, require line-by-line visible evidence of the entire artifact in the action stream rather than accepting file-write success plus a summarized verification claim.
-- When the planned information source is unavailable due to auth, permission, or tool failure, immediately switch to a clearly defined fallback plan or pause explicitly for user input instead of spending turns probing the environment.
-- Treat repeated off-target tool use as a process failure signal: after one correction, require the next actions to map directly to the task’s evidence needs or stop the run and re-brief.
-- When a task depends on approximate or memory-based facts, explicitly brief for conservative phrasing rather than maximal specificity so the executor avoids unsupported precision.
-- For ranked or subjective requests, define the evaluation lens in the brief (for example, fame, prestige, usability, cost, or performance) so item selection is consistent and reviewable.
-- When a command fails in an environment-customized way, separate environment-specific blockers from task-state blockers before choosing the next action, so the executor does not chase a misleading first explanation.
-- If an executor proposes a manual substitute for a standard bootstrap mechanism, require a direct justification that it preserves the task’s acceptance path and is not just bypassing the real failure.
-- For requests using subjective labels like “best,” define the interpretation in the brief as a concrete selection lens (for example fame, prestige, popularity, or performance) so the executor can choose consistently and the reviewer can verify against that lens.
-- When a standard toolchain command fails, inspect the exact failing hook or injected config in the error output first and direct recovery at that layer before attempting artifact-level substitutions or file hunts.
-- When repository or supervisor write boundaries block edits in the intended target, treat that first as an environment-scope check and confirm whether the target path is actually inside the allowed workspace before concluding the task is blocked.
-- When a task requires a file to both run as a program and be imported by a test runner, explicitly require import-safe entry-point structure so verification does not trigger unintended side effects.
-- When a deliverable must be verified by human review, require a final output method whose entire contents will survive into the review artifact channel, not just the live action log.
+_(Sorted by frequency across runs — patterns hit more often appear first. `[×N]` shows how many tasks have promoted this lesson.)_
+
+- Test pattern with proper Case for URLs.  _(applies_to: code)_
+- Always include a verification command in the brief that the executor can run to prove the deliverable works.  _(applies_to: code, ops)_
+- **fix:** Phrase the verification as a single bash command whose exit code or stdout makes pass/fail unambiguous.
+- When the primary deliverable is a document, review against the artifact itself rather than relying on the executor's summary of what it contains.  _(applies_to: writing, research, ops)_
+- **fix:** Request or inspect the full document text and verify each required section and claim directly against the brief before passing.
+- When a task requires one deliverable to depend on another, brief and review for code-level reuse of the upstream logic rather than accepting duplicated behavior that merely produces the same output.  _(applies_to: code, data)_
+- **fix:** Require the downstream artifact to import or call the upstream module/function directly and verify that dependency in the final artifact or run evidence.

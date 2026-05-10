@@ -1,0 +1,295 @@
+{
+  "summary": {
+    "total": 16,
+    "pass": 16,
+    "fail": 0,
+    "error": 0,
+    "pass_rate": 100.0
+  },
+  "results": [
+    {
+      "id": "build-py-cli-calc",
+      "task_id": "8be2ab788916",
+      "status": "done",
+      "duration_secs": 81.3,
+      "cost": {
+        "databricks_input_tokens": 17963,
+        "databricks_output_tokens": 2214,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "next_steps_must_include_any_of": true
+      }
+    },
+    {
+      "id": "research-mango-list",
+      "task_id": "eec1775ecf4d",
+      "status": "done",
+      "duration_secs": 54.6,
+      "cost": {
+        "databricks_input_tokens": 11731,
+        "databricks_output_tokens": 1680,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "research-postgres-vs-sqlite",
+      "task_id": "03dbc7f0e730",
+      "status": "done",
+      "duration_secs": 128.1,
+      "cost": {
+        "databricks_input_tokens": 15888,
+        "databricks_output_tokens": 2629,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-product-spec",
+      "task_id": "1c3dd7b6433f",
+      "status": "done",
+      "duration_secs": 78.4,
+      "cost": {
+        "databricks_input_tokens": 12359,
+        "databricks_output_tokens": 2011,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "research-best-typed-langs",
+      "task_id": "ef0179709ca8",
+      "status": "done",
+      "duration_secs": 79.6,
+      "cost": {
+        "databricks_input_tokens": 12199,
+        "databricks_output_tokens": 1699,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-launch-blog",
+      "task_id": "4256d11be3de",
+      "status": "done",
+      "duration_secs": 62.4,
+      "cost": {
+        "databricks_input_tokens": 12439,
+        "databricks_output_tokens": 1673,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-incident-postmortem",
+      "task_id": "ccdded7828d4",
+      "status": "done",
+      "duration_secs": 132.2,
+      "cost": {
+        "databricks_input_tokens": 14825,
+        "databricks_output_tokens": 2450,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "data-csv-to-md",
+      "task_id": "a27962c98e29",
+      "status": "done",
+      "duration_secs": 48.2,
+      "cost": {
+        "databricks_input_tokens": 11919,
+        "databricks_output_tokens": 1614,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "data-extract-emails",
+      "task_id": "11890dfa2821",
+      "status": "done",
+      "duration_secs": 64.7,
+      "cost": {
+        "databricks_input_tokens": 14886,
+        "databricks_output_tokens": 2299,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "ops-cron-template",
+      "task_id": "a0b35a01e3f1",
+      "status": "done",
+      "duration_secs": 53.0,
+      "cost": {
+        "databricks_input_tokens": 14169,
+        "databricks_output_tokens": 1830,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "ops-systemd-unit",
+      "task_id": "f31475b43d0d",
+      "status": "done",
+      "duration_secs": 61.3,
+      "cost": {
+        "databricks_input_tokens": 14702,
+        "databricks_output_tokens": 2338,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "code-fix-typo",
+      "task_id": "8b54397b2eec",
+      "status": "done",
+      "duration_secs": 61.7,
+      "cost": {
+        "databricks_input_tokens": 13477,
+        "databricks_output_tokens": 1280,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-fizzbuzz",
+      "task_id": "b9ca478333c0",
+      "status": "done",
+      "duration_secs": 53.3,
+      "cost": {
+        "databricks_input_tokens": 14459,
+        "databricks_output_tokens": 1708,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-anagram-checker",
+      "task_id": "8d30dec3aafa",
+      "status": "done",
+      "duration_secs": 53.8,
+      "cost": {
+        "databricks_input_tokens": 14464,
+        "databricks_output_tokens": 1839,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-shell-script-summary",
+      "task_id": "21deb2e8792e",
+      "status": "done",
+      "duration_secs": 73.4,
+      "cost": {
+        "databricks_input_tokens": 17586,
+        "databricks_output_tokens": 2436,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "research-rate-limit-strategies",
+      "task_id": "9befe4243951",
+      "status": "done",
+      "duration_secs": 64.6,
+      "cost": {
+        "databricks_input_tokens": 12577,
+        "databricks_output_tokens": 1770,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    }
+  ]
+}

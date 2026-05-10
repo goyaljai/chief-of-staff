@@ -1,0 +1,102 @@
+{
+  "summary": {
+    "total": 5,
+    "pass": 5,
+    "fail": 0,
+    "error": 0,
+    "pass_rate": 100.0
+  },
+  "results": [
+    {
+      "id": "build-py-cli-calc",
+      "task_id": "239c6fdfe465",
+      "status": "done",
+      "duration_secs": 63.3,
+      "cost": {
+        "databricks_input_tokens": 21600,
+        "databricks_output_tokens": 2113,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "next_steps_must_include_any_of": true
+      }
+    },
+    {
+      "id": "research-mango-list",
+      "task_id": "c93da40cc3ee",
+      "status": "done",
+      "duration_secs": 50.2,
+      "cost": {
+        "databricks_input_tokens": 14547,
+        "databricks_output_tokens": 1793,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "build-android-helloworld",
+      "task_id": "65a7f4d05b2c",
+      "status": "done",
+      "duration_secs": 252.3,
+      "cost": {
+        "databricks_input_tokens": 127006,
+        "databricks_output_tokens": 3933,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "research-postgres-vs-sqlite",
+      "task_id": "6e30a1c777c7",
+      "status": "done",
+      "duration_secs": 85.9,
+      "cost": {
+        "databricks_input_tokens": 15794,
+        "databricks_output_tokens": 2353,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-product-spec",
+      "task_id": "31d085199055",
+      "status": "done",
+      "duration_secs": 66.5,
+      "cost": {
+        "databricks_input_tokens": 15300,
+        "databricks_output_tokens": 1950,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    }
+  ]
+}

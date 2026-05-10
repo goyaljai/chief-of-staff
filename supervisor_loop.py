@@ -19,6 +19,7 @@ from config import (
 )
 from orchestrator import Orchestrator, Reviewer, append_to_global, save_task_skill, set_usage_callback
 from task_store import STORE, TaskState
+import dag_executor
 import rag
 
 REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
@@ -249,6 +250,119 @@ class SupervisorLoop:
             return
 
         STORE.append_log(self.task.id, {"kind": "brief", "text": self.task.brief[:500]})
+
+        # V3.5 #A1: detect DAG brief; if present, fan-out via LangGraph.
+        try:
+            steps = self.orchestrator.parse_dag(self.task.brief)
+        except Exception:
+            steps = None
+        if steps and len(steps) > 1:
+            STORE.append_log(self.task.id, {"kind": "dag_detected", "steps": [s["id"] for s in steps]})
+            STORE.set_status(self.task.id, "executing_dag")
+            hook_log_dir = self.workspace / "_hooks"
+
+            def _bridge_step_event(step_id: str, ev):
+                # Forward every Claude event from a parallel step into the
+                # task's STORE log so SSE subscribers and /task/{id} polling
+                # see live progress instead of a silent gap until the DAG ends.
+                try:
+                    payload = {"kind": "dag_step_event", "step_id": step_id}
+                    et = getattr(ev, "type", None) or getattr(ev, "kind", None)
+                    if et:
+                        payload["event_type"] = et
+                    text = getattr(ev, "text", None)
+                    if text:
+                        payload["text"] = text[:1000]
+                    tool = getattr(ev, "tool", None)
+                    if tool:
+                        payload["tool"] = tool
+                    STORE.append_log(self.task.id, payload)
+                except Exception:
+                    pass
+
+            try:
+                # V3.5 #3: build shared context from the brief's first
+                # Objective/Deliverable sections so each parallel step
+                # inherits the larger goal, not just its own one-line action.
+                brief = self.task.brief or ""
+                shared_ctx_parts: list[str] = [
+                    f"OVERALL GOAL: {self.task.goal}",
+                ]
+                for hdr in ("## Objective", "## Deliverable", "## What needs to be built", "## Done"):
+                    idx = brief.find(hdr)
+                    if idx < 0:
+                        continue
+                    nxt = brief.find("\n## ", idx + 1)
+                    excerpt = brief[idx: nxt if nxt > 0 else idx + 1200].strip()
+                    shared_ctx_parts.append(excerpt[:1200])
+                shared_context = "\n\n".join(shared_ctx_parts)
+
+                dag_result = await dag_executor.execute_dag(
+                    steps, self.workspace, hook_log_dir,
+                    on_step_event=_bridge_step_event,
+                    exec_id=self.task.id,
+                    shared_context=shared_context,
+                )
+                STORE.append_log(self.task.id, {
+                    "kind": "dag_result",
+                    "ok": dag_result.get("ok"),
+                    "failed": dag_result.get("failed", []),
+                })
+            except Exception as e:
+                STORE.append_log(self.task.id, {"kind": "error", "where": "dag_executor", "msg": str(e)})
+                dag_result = {"ok": False, "error": str(e)}
+
+            # Drain each step's isolated hook log into the task log so
+            # permission-hook events from every parallel step are preserved.
+            for step_result in (dag_result.get("results") or {}).values():
+                step_hook_log = step_result.get("hook_log")
+                if not step_hook_log:
+                    continue
+                try:
+                    for entry in _read_hook_log(Path(step_hook_log)):
+                        STORE.append_log(self.task.id, {
+                            "kind": "hook",
+                            "step_id": step_result.get("step_id"),
+                            **entry,
+                        })
+                except Exception:
+                    pass
+
+            STORE.set_status(self.task.id, "reviewing_loop_1")
+            full_log = _summarize_log(self.task.log, limit=300, full_text=True)
+            artifacts = _list_workspace_artifacts(self.workspace)
+            combined = f"{full_log}\n\nDAG result: {dag_result}\n\n=== Workspace artifacts ===\n{artifacts}"
+            review = self.reviewer.final_review(goal=self.task.goal, action_log=combined, workspace=str(self.workspace))
+            STORE.append_log(self.task.id, {"kind": "final_review", "passed": review["passed"], "issues": review["issues"], "summary": review["summary"]})
+            if review["passed"]:
+                STORE.set_status(self.task.id, "done")
+                self._write_learning(1, review)
+                self._index_in_rag(review)
+                self._maybe_upload_trace(review)
+                STORE.unregister_runner(self.task.id)
+                self.task.result = {
+                    "success": True,
+                    "summary": review["summary"],
+                    "next_steps": review.get("next_steps", ""),
+                    "loops": 1,
+                    "execution": "dag_parallel",
+                    "workspace": str(self.workspace),
+                }
+                return
+            else:
+                # DAG failed review — fall through to normal correction loops
+                self.task.corrections.extend(review["issues"])
+                STORE.append_log(self.task.id, {"kind": "dag_review_failed_falling_through"})
+
+            # V3.5 audit fix: notes added during executing_dag must not be
+            # silently dropped — record them so the sequential fall-through
+            # path consumes them, and so the user sees they were preserved.
+            if self.task.user_notes:
+                STORE.append_log(self.task.id, {
+                    "kind": "notes_after_dag",
+                    "notes": list(self.task.user_notes),
+                    "applied": "queued_for_sequential_loop",
+                })
 
         prompt = self.task.brief
         session_id: str | None = None
@@ -569,22 +683,41 @@ class SupervisorLoop:
             if not lessons:
                 STORE.append_log(self.task.id, {"kind": "learning_skipped", "reason": "no promotable lessons"})
                 return
-            added = append_to_global(lessons)
+            added = append_to_global(lessons, origin_task_id=self.task.id)
             STORE.append_log(self.task.id, {
                 "kind": "learning_promoted",
-                "added": added,
+                "added_new": added,
+                "promoted_total": len(lessons),
                 "lessons": lessons,
             })
         except Exception as e:
             STORE.append_log(self.task.id, {"kind": "learning_error", "msg": str(e)})
 
     def _build_post_escalation_prompt(self) -> str:
+        """V3.5 D5: handle free-text escalation answers in addition to a/b.
+
+        - 'a' / 'b' (legacy): pick option_a / option_b from the escalation dict.
+        - Anything else: treat as a free-text directive from the user
+          ('do X instead', 'try Y', 'use lib Z'). Inject verbatim — the user
+          knows their own context better than our orchestrator."""
         esc = self.task.escalation or {}
-        chosen = esc.get("option_a") if self.task.escalation_answer == "a" else esc.get("option_b")
+        ans = (self.task.escalation_answer or "").strip()
         STORE.set_status(self.task.id, "executing")
+        if ans.lower() == "a":
+            chosen = esc.get("option_a") or "(option A)"
+            decision_block = f"The decision is: {chosen}"
+        elif ans.lower() == "b":
+            chosen = esc.get("option_b") or "(option B)"
+            decision_block = f"The decision is: {chosen}"
+        else:
+            decision_block = (
+                "The user gave a free-text directive (treat as authoritative — "
+                "the user knows their context better than the reviewer):\n"
+                f"  > {ans}"
+            )
         return (
-            "Continue the original task. The reviewer paused you with a question. "
-            f"The decision is: {chosen}\n\n"
+            "Continue the original task. The reviewer paused you with a question.\n\n"
+            f"{decision_block}\n\n"
             f"Original brief:\n{self.task.brief}\n\n"
             "Resume the work using this decision."
         )
