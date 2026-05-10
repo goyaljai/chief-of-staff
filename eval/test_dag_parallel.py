@@ -239,11 +239,16 @@ async def main():
     dag_executor.ClaudeRunner = _LongRunner
     dag_executor._GRAPH = None
 
+    # F6 fix: use a UUID per run so the checkpoint stream is fresh — a stale
+    # "done" checkpoint from a prior test run would make LangGraph skip the
+    # runners entirely (the very feature we want F6 to provide!).
+    import uuid as _uuid
+    fresh_exec_id = f"test_exec_9_{_uuid.uuid4().hex[:8]}"
+
     async def _trigger():
-        # Start the DAG; after 0.3s, call interrupt_all_for
         async def _delayed():
-            await asyncio.sleep(0.3)
-            n = dag_executor.interrupt_all_for("test_exec_9")
+            await asyncio.sleep(1.0)
+            n = dag_executor.interrupt_all_for(fresh_exec_id)
             interrupted.append(("interrupted_count", n))
 
         task = asyncio.create_task(_delayed())
@@ -252,7 +257,7 @@ async def main():
              {"id": "long_b", "action": "y", "depends_on": []}],
             Path("/tmp/cos-dag-test/cancel"),
             Path("/tmp/cos-dag-test/cancel/_hooks"),
-            exec_id="test_exec_9",
+            exec_id=fresh_exec_id,
         )
         await task
         return out
