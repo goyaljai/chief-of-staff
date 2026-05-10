@@ -19,6 +19,15 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config  # noqa: F401
 
+# CI fix: this test mocks both Databricks (embeddings) and Voyage (rerank)
+# clients, so the real env vars aren't needed. But the DatabricksEmbeddings
+# constructor (after R6-2) raises RuntimeError if DATABRICKS_TOKEN /
+# DATABRICKS_BASE_URL are missing — which they ARE in CI without secrets.
+# Inject dummy values that satisfy the truthiness check; the mocked client
+# will replace the real one before any HTTP call is made.
+os.environ.setdefault("DATABRICKS_TOKEN", "test-token-not-real")
+os.environ.setdefault("DATABRICKS_BASE_URL", "http://test-base-url.invalid")
+
 
 def main():
     print("=" * 60)
