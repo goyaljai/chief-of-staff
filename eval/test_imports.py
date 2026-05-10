@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config  # noqa: F401  -- loads .env
 
 modules = [
-    "persistence", "rag", "claude_runner", "dag_executor",
+    "persistence", "rag", "claude_runner", "workflows.dag",
     "agents", "supervisor_loop", "main",
 ]
 
@@ -31,7 +31,7 @@ for m in modules:
 
 # Sanity: confirm symbols that supervisor_loop expects to use at runtime
 import supervisor_loop  # noqa: F401
-import dag_executor as _dag  # noqa: F401
+import workflows.dag as _dag  # noqa: F401
 assert hasattr(supervisor_loop, "dag_executor"), \
     "supervisor_loop did not import dag_executor — runtime NameError will fire on DAG path"
 assert callable(_dag.execute_dag)

@@ -329,7 +329,7 @@ class TaskStore:
         # used to return ok=True while parallel subprocesses kept running
         # because the supervisor's `self.runner` wasn't the one in use.
         try:
-            import dag_executor
+            import workflows.dag as dag_executor
             n = dag_executor.interrupt_all_for(tid)
             if n:
                 interrupted_any = True

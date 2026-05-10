@@ -18,7 +18,7 @@ import config  # noqa: F401
 
 async def main():
     import main as srv  # noqa: F401 — kept for STORE access via srv.STORE
-    import dag_executor
+    import workflows.dag as dag_executor
     import services.shutdown as shutdown_mod
     from persistence import TaskState
 

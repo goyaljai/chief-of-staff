@@ -47,19 +47,19 @@ async def main():
         print("[skip] set COS_ALLOW_DESTRUCTIVE_TESTS=1 or use a local/test DSN")
         return
 
-    import dag_executor
+    import workflows.dag as dag_executor
     print("=" * 60)
     print("F6 CHECKPOINT + RESUME TEST")
     print("=" * 60)
 
     # 1. Checkpointer is configured
-    cp = await dag_executor._get_async_checkpointer()
+    cp = await dag_executor.graph._get_async_checkpointer()
     assert cp is not None, "AsyncPostgresSaver must be configured (DATABASE_URL set)"
     print(f"  ✓ AsyncPostgresSaver wired ({type(cp).__name__})")
 
     # Replace ClaudeRunner with the counting fake
-    dag_executor.ClaudeRunner = _CountingRunner
-    dag_executor._GRAPH = None  # bust cache so it picks up the new runner
+    dag_executor.nodes.ClaudeRunner = _CountingRunner
+    dag_executor.graph._GRAPH = None  # bust cache so it picks up the new runner
 
     # 2. First run with a fresh thread_id — should run all 3 steps
     thread_id = f"f6_test_{uuid.uuid4().hex[:8]}"

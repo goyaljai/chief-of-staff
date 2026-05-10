@@ -12,7 +12,7 @@ from pathlib import Path
 # load .env first so DATABASE_URL etc. are present
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config  # noqa: F401
-import dag_executor
+import workflows.dag as dag_executor
 
 
 class _FakeResult:
@@ -48,10 +48,11 @@ async def _run_test(steps, label, on_step_event=None, runner_cls=None):
     workspace.mkdir(parents=True, exist_ok=True)
     hook_log_dir = workspace / "_hooks"
 
-    # monkey-patch BEFORE the graph builds nodes
-    dag_executor.ClaudeRunner = runner_cls or _RecordingRunner
+    # monkey-patch BEFORE the graph builds nodes — _step_node looks up
+    # ClaudeRunner in the nodes module's namespace, not the package facade.
+    dag_executor.nodes.ClaudeRunner = runner_cls or _RecordingRunner
     # bust any cached graph
-    dag_executor._GRAPH = None
+    dag_executor.graph._GRAPH = None
 
     t0 = time.monotonic()
     out = await dag_executor.execute_dag(steps, workspace, hook_log_dir,
@@ -147,8 +148,8 @@ async def main():
                 r.success = False
             return r
 
-    dag_executor.ClaudeRunner = _FailingRunner
-    dag_executor._GRAPH = None
+    dag_executor.nodes.ClaudeRunner = _FailingRunner
+    dag_executor.graph._GRAPH = None
     _RecordingRunner.events.clear()
     out = await dag_executor.execute_dag(
         [{"id": "alpha", "action": "x", "depends_on": []},
@@ -165,8 +166,8 @@ async def main():
     # Test 6: per-step hook log isolation (BUG FIX) — each step gets its own
     # hook_log file; no two parallel steps share a writable path.
     print(f"\nTest 6: Per-step hook log isolation")
-    dag_executor.ClaudeRunner = _RecordingRunner
-    dag_executor._GRAPH = None
+    dag_executor.nodes.ClaudeRunner = _RecordingRunner
+    dag_executor.graph._GRAPH = None
     out, elapsed, events = await _run_test(
         [{"id": "p1", "action": "x", "depends_on": []},
          {"id": "p2", "action": "y", "depends_on": []},
@@ -236,8 +237,8 @@ async def main():
         def interrupt(self):
             interrupted.append(("interrupt_called", self.id))
 
-    dag_executor.ClaudeRunner = _LongRunner
-    dag_executor._GRAPH = None
+    dag_executor.nodes.ClaudeRunner = _LongRunner
+    dag_executor.graph._GRAPH = None
 
     # F6 fix: use a UUID per run so the checkpoint stream is fresh — a stale
     # "done" checkpoint from a prior test run would make LangGraph skip the
@@ -310,8 +311,8 @@ async def main():
     # Now with shared_context
     captured_prompts.clear()
     workspace = Path("/tmp/cos-dag-test/ctx2"); workspace.mkdir(parents=True, exist_ok=True)
-    dag_executor.ClaudeRunner = _PromptCaptureRunner
-    dag_executor._GRAPH = None
+    dag_executor.nodes.ClaudeRunner = _PromptCaptureRunner
+    dag_executor.graph._GRAPH = None
     out2 = await dag_executor.execute_dag(
         [{"id": "p1", "action": "produce file_a", "depends_on": []},
          {"id": "p2", "action": "produce file_b", "depends_on": []}],

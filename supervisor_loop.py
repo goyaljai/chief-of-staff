@@ -19,7 +19,7 @@ from config import (
 )
 from agents import Orchestrator, Reviewer, append_to_global, save_task_skill, set_usage_callback
 from persistence import STORE, TaskState
-import dag_executor
+import workflows.dag as dag_executor
 import rag
 
 REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}

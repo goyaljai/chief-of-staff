@@ -88,7 +88,7 @@ async def drain_inflight() -> None:
     after restart picks up at the last completed superstep instead of
     restarting from step 1.
     """
-    import dag_executor
+    import workflows.dag as dag_executor
 
     print("[shutdown] enumerating in-flight tasks…")
     interrupted: list[str] = []
