@@ -20,7 +20,10 @@ langgraph-checkpoint-postgres>=2.0.0  # F6: DAG checkpoint + resume on crash
 psycopg[binary]>=3.2.0                # PostgresSaver dependency (psycopg3)
 psycopg-pool>=3.2.0
 langsmith>=0.1.130
-sentence-transformers>=3.0.0
+sentence-transformers>=3.0.0  # legacy — kept for back-compat; no longer used post v2.0 T2
+
+# v2.0 T1: Voyage rerank-2 cross-encoder for retrieval quality boost
+voyageai>=0.2.0
 
 # Kept for back-compat; can be removed after the LangChain RAG migration is
 # fully verified in production.

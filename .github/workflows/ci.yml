@@ -80,6 +80,9 @@ jobs:
       - name: D1 Lite undo regression (snapshot + restore)
         run: python eval/test_d1_undo.py
 
+      - name: v2.0 RAG pipeline regression (T1 rerank + T2 embeddings + R5 fixes)
+        run: python eval/test_rag_pipeline.py
+
       - name: DAG executor parallel/topology tests
         run: python eval/test_dag_parallel.py
 
