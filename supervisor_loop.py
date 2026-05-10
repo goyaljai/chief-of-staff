@@ -694,12 +694,30 @@ class SupervisorLoop:
             STORE.append_log(self.task.id, {"kind": "learning_error", "msg": str(e)})
 
     def _build_post_escalation_prompt(self) -> str:
+        """V3.5 D5: handle free-text escalation answers in addition to a/b.
+
+        - 'a' / 'b' (legacy): pick option_a / option_b from the escalation dict.
+        - Anything else: treat as a free-text directive from the user
+          ('do X instead', 'try Y', 'use lib Z'). Inject verbatim — the user
+          knows their own context better than our orchestrator."""
         esc = self.task.escalation or {}
-        chosen = esc.get("option_a") if self.task.escalation_answer == "a" else esc.get("option_b")
+        ans = (self.task.escalation_answer or "").strip()
         STORE.set_status(self.task.id, "executing")
+        if ans.lower() == "a":
+            chosen = esc.get("option_a") or "(option A)"
+            decision_block = f"The decision is: {chosen}"
+        elif ans.lower() == "b":
+            chosen = esc.get("option_b") or "(option B)"
+            decision_block = f"The decision is: {chosen}"
+        else:
+            decision_block = (
+                "The user gave a free-text directive (treat as authoritative — "
+                "the user knows their context better than the reviewer):\n"
+                f"  > {ans}"
+            )
         return (
-            "Continue the original task. The reviewer paused you with a question. "
-            f"The decision is: {chosen}\n\n"
+            "Continue the original task. The reviewer paused you with a question.\n\n"
+            f"{decision_block}\n\n"
             f"Original brief:\n{self.task.brief}\n\n"
             "Resume the work using this decision."
         )

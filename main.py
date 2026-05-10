@@ -212,7 +212,43 @@ def questions(req: TaskQuestionsRequest):
 
 
 @app.post("/task/run")
-async def run(req: TaskRunRequest):
+async def run(req: TaskRunRequest, dry_run: bool = False):
+    """V3.5 D6: with `?dry_run=true`, generate Skill.md + brief and return them
+    WITHOUT spawning Claude. Lets the user preview the plan before paying tokens.
+    No task row persisted in dry-run mode (we use a transient TaskState)."""
+    if dry_run:
+        from task_store import TaskState as _TS
+        import uuid as _uuid
+        transient = _TS(
+            id=f"dry_{_uuid.uuid4().hex[:8]}",
+            goal=req.task,
+            clarifications=req.clarifications,
+            workspace=str(WORKSPACE_ROOT / "_dry_run"),
+        )
+        try:
+            skill_md = orchestrator_singleton.generate_skill_brief(
+                transient.goal, transient.clarifications, skill_preview="", library_match=None,
+            )
+            transient.skill_md = skill_md
+            brief = orchestrator_singleton.build_brief(
+                transient.goal, transient.clarifications,
+                workspace=transient.workspace, inline_skill=skill_md,
+            )
+            try:
+                steps = orchestrator_singleton.parse_dag(brief)
+            except Exception:
+                steps = None
+            return {
+                "dry_run": True,
+                "task_id": transient.id,
+                "skill_md": skill_md,
+                "brief": brief,
+                "dag_steps": steps or [],
+                "would_use_dag": bool(steps and len(steps) > 1),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"dry_run failed: {e}")
+
     state = STORE.create(req.task, req.clarifications, "")
     if req.working_dir:
         state.workspace = req.working_dir
@@ -315,15 +351,22 @@ def _last_claude_output(log: list[dict]) -> str:
 
 @app.post("/task/{task_id}/escalation")
 def answer_escalation(task_id: str, body: EscalationAnswer):
+    """V3.5 D5: free-form escalation answers, not just 'a'/'b'.
+
+    Backwards compatible: 'a' / 'b' still routed to the original two-option
+    branches in supervisor_loop's _build_post_escalation_prompt. Anything
+    longer is forwarded as a free-text directive ('do X instead', 'try Y'),
+    which the supervisor injects into the next loop's prompt verbatim."""
     state = STORE.get(task_id)
     if not state:
         raise HTTPException(status_code=404, detail="task not found")
     if state.status != "escalated":
         raise HTTPException(status_code=400, detail=f"task is not escalated (status={state.status})")
-    if body.answer.lower() not in ("a", "b"):
-        raise HTTPException(status_code=400, detail="answer must be 'a' or 'b'")
-    ok = STORE.answer_escalation(task_id, body.answer)
-    return {"ok": ok, "answer": body.answer}
+    answer = (body.answer or "").strip()
+    if not answer:
+        raise HTTPException(status_code=400, detail="answer empty")
+    ok = STORE.answer_escalation(task_id, answer)
+    return {"ok": ok, "answer": answer, "mode": "binary" if answer.lower() in ("a", "b") else "free_text"}
 
 
 @app.post("/task/{task_id}/note")
@@ -397,6 +440,33 @@ def reindex():
     fts = db.reindex_fts()
     chroma = rag.reindex_all_from_db()
     return {"fts_rows": fts, "chroma": chroma}
+
+
+class PromoteLessonRequest(BaseModel):
+    pattern: str
+    remediation: str | None = None
+    domains: list[str] = []
+    origin_task_id: str | None = None
+
+
+@app.post("/admin/promote")
+def admin_promote_lesson(req: PromoteLessonRequest):
+    """V3.5 D7: seed/curate skill_lessons directly without running a task.
+
+    UPSERTs the lesson (frequency increments on duplicates) and re-renders
+    skills/global.md. Closes gap L10."""
+    from orchestrator import append_to_global
+    pattern = (req.pattern or "").strip()
+    if not pattern:
+        raise HTTPException(status_code=400, detail="pattern is required")
+    entry = {"pattern": pattern}
+    if req.remediation:
+        entry["remediation"] = req.remediation
+    if req.domains:
+        entry["domains"] = req.domains
+    added = append_to_global([entry], origin_task_id=req.origin_task_id or "admin")
+    total = db.count_skill_lessons()
+    return {"ok": True, "added_new": added, "total_lessons": total}
 
 
 @app.post("/task/{task_id}/ask")
