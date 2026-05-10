@@ -74,6 +74,9 @@ jobs:
           COS_ALLOW_DESTRUCTIVE_TESTS: "1"
         run: python eval/test_f6_checkpoint.py
 
+      - name: F1 graceful shutdown regression
+        run: python eval/test_f1_shutdown.py
+
       - name: DAG executor parallel/topology tests
         run: python eval/test_dag_parallel.py
 

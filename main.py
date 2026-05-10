@@ -103,6 +103,11 @@ class NoteRequest(BaseModel):
     note: str
 
 
+# V3.5 F1: shutdown coordination. The flag flips True when SIGINT/SIGTERM
+# arrives so /task/run can immediately reject new submissions while we drain.
+_SHUTTING_DOWN: bool = False
+
+
 @app.on_event("startup")
 async def startup():
     db.init_db()
@@ -133,7 +138,77 @@ async def startup():
         print("[main] log_flusher started (E5: batched log writes)")
     except Exception as e:
         print(f"[main] log_flusher start failed: {e}")
+    # V3.5 F1: install SIGINT/SIGTERM handlers so Ctrl+C drains cleanly.
+    try:
+        import signal
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _on_signal, sig)
+        print("[main] F1: SIGINT/SIGTERM graceful shutdown handlers installed")
+    except Exception as e:
+        # add_signal_handler isn't supported on Windows; degrade gracefully.
+        print(f"[main] signal handlers not installed (ok on Windows): {e}")
     asyncio.create_task(_workspace_sweeper())
+
+
+def _on_signal(sig):
+    """Triggered by SIGINT/SIGTERM. Marks shutdown, schedules drain coroutine,
+    and lets the FastAPI shutdown hook do the cleanup. Does NOT exit the process —
+    uvicorn handles that after its own shutdown completes."""
+    global _SHUTTING_DOWN
+    if _SHUTTING_DOWN:
+        return  # second signal — let uvicorn force-exit
+    _SHUTTING_DOWN = True
+    print(f"[main] F1: signal {sig} received — draining in-flight work")
+    asyncio.create_task(_drain_inflight())
+
+
+async def _drain_inflight() -> None:
+    """V3.5 F1: drain in-flight work before the process exits.
+    - Stop accepting new tasks (handled via the _SHUTTING_DOWN flag in /task/run)
+    - For every non-terminal task: interrupt its runners, mark interrupted
+    - Flush the E5 log buffer one last time so nothing is lost
+    - Close the F6 checkpointer pool + db.py pool
+    With F6 in place, "interrupted" tasks now have DAG checkpoints — they
+    resume from the last superstep when the user POSTs /task/{id}/resume
+    after restart."""
+    import dag_executor
+    print("[shutdown] enumerating in-flight tasks…")
+    interrupted: list[str] = []
+    for state in list(STORE.all()):
+        if state.status in ("done", "failed", "abandoned", "cancelled"):
+            continue
+        try:
+            dag_executor.interrupt_all_for(state.id)
+        except Exception as e:
+            print(f"[shutdown] dag_interrupt({state.id}) failed: {e}")
+        try:
+            STORE.append_log(state.id, {"kind": "interrupted_by_shutdown", "ts": time.time()})
+            STORE.set_status(state.id, "interrupted")
+            interrupted.append(state.id)
+        except Exception as e:
+            print(f"[shutdown] mark interrupted({state.id}) failed: {e}")
+    print(f"[shutdown] marked {len(interrupted)} tasks as interrupted")
+    # Final log flush
+    try:
+        await STORE._flush_log_buffer()
+    except Exception as e:
+        print(f"[shutdown] final log flush failed: {e}")
+    # Close DB pools
+    try:
+        db._close_pool()
+    except Exception as e:
+        print(f"[shutdown] db pool close failed: {e}")
+    print("[shutdown] drain complete — uvicorn will now exit")
+
+
+@app.on_event("shutdown")
+async def shutdown_hook():
+    """FastAPI hook fires when uvicorn finishes its own shutdown phase.
+    Belt-and-braces in case the signal handler didn't get to run (e.g. when
+    invoked from the test harness or via lifespan-only mode)."""
+    if not _SHUTTING_DOWN:
+        await _drain_inflight()
 
 
 def _supabase_rest_ping() -> None:
@@ -238,6 +313,9 @@ async def run(req: TaskRunRequest, dry_run: bool = False):
     """V3.5 D6: with `?dry_run=true`, generate Skill.md + brief and return them
     WITHOUT spawning Claude. Lets the user preview the plan before paying tokens.
     No task row persisted in dry-run mode (we use a transient TaskState)."""
+    # V3.5 F1: refuse new submissions while we're draining.
+    if _SHUTTING_DOWN:
+        raise HTTPException(status_code=503, detail="server shutting down — try again after restart")
     if dry_run:
         from task_store import TaskState as _TS
         import uuid as _uuid
