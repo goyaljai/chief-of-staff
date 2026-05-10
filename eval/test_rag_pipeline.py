@@ -82,8 +82,8 @@ def main():
     # to preserve input/output ordering. See the R6-1 case below.
 
     # ── R5-2: _get_rerank_client thread-safe (concurrent callers) ─────────
-    rag._RERANK_CLIENT = None
-    rag._RERANK_INIT_TRIED = False
+    rag.rerank._RERANK_CLIENT = None
+    rag.rerank._RERANK_INIT_TRIED = False
     init_calls = {"n": 0}
 
     class _FakeVoyageClient:
@@ -97,7 +97,7 @@ def main():
         clients = []
 
         def _worker():
-            clients.append(rag._get_rerank_client())
+            clients.append(rag.rerank._get_rerank_client())
 
         threads = [threading.Thread(target=_worker) for _ in range(8)]
         for t in threads:
@@ -110,13 +110,13 @@ def main():
     print(f"  ✓ R5-2: 8 concurrent _get_rerank_client() calls → 1 init, 1 singleton")
 
     # ── R5-3: _rerank fallback preserves rerank_score field ───────────────
-    rag._RERANK_CLIENT = None
-    rag._RERANK_INIT_TRIED = True  # force "no client" path
+    rag.rerank._RERANK_CLIENT = None
+    rag.rerank._RERANK_INIT_TRIED = True  # force "no client" path
     candidates = [
         {"task_id": "a", "doc": "doc A", "distance": 0.1},
         {"task_id": "b", "doc": "doc B", "distance": 0.2},
     ]
-    out = rag._rerank("query", candidates, top_k=2)
+    out = rag.rerank._rerank("query", candidates, top_k=2)
     assert all("rerank_score" in c for c in out), \
         "rerank_score field must be present even when reranker is skipped"
     assert all(c["rerank_score"] is None for c in out), \
@@ -131,21 +131,21 @@ def main():
         MagicMock(index=1, relevance_score=0.4),
     ]
     fake_client.rerank.return_value = fake_result
-    rag._RERANK_CLIENT = fake_client
-    rag._RERANK_INIT_TRIED = True
-    out = rag._rerank("query", candidates, top_k=2)
+    rag.rerank._RERANK_CLIENT = fake_client
+    rag.rerank._RERANK_INIT_TRIED = True
+    out = rag.rerank._rerank("query", candidates, top_k=2)
     assert all(isinstance(c["rerank_score"], float) for c in out)
     print("  ✓ R5-3: successful rerank → rerank_score is a float")
 
     # When rerank raises, fallback STILL preserves the field
     fake_client.rerank.side_effect = Exception("voyage 503")
-    out = rag._rerank("query", candidates, top_k=2)
+    out = rag.rerank._rerank("query", candidates, top_k=2)
     assert all("rerank_score" in c and c["rerank_score"] is None for c in out)
     print("  ✓ R5-3: failed-rerank path also includes rerank_score=None (no KeyError for callers)")
 
     # ── R5-4: reindex_all_from_db batches embed calls ─────────────────────
     # Mock 25 task rows; verify embed_documents is called with batch (not 25 individual times)
-    rag._EMBED = None
+    rag.embeddings._EMBED = None
     fake_emb = MagicMock()
     fake_emb.embed_documents.return_value = [[0.1] * 1024] * 25
 
@@ -157,9 +157,13 @@ def main():
         {"id": f"t{i}", "goal": f"goal {i}", "summary": f"sum {i}", "skill_md": "", "skill_description": ""}
         for i in range(25)
     ]
-    with patch.object(rag, "_get_embed", return_value=fake_emb), \
-         patch.object(rag, "_get_task_store", return_value=fake_store), \
-         patch.object(rag, "_get_skill_store", return_value=fake_store), \
+    # After the rag-package split, the names that need patching live in
+    # the submodule whose functions actually call them — patching the
+    # facade `rag` no longer affects `rag.reindex.reindex_all_from_db`'s
+    # already-bound references.
+    with patch.object(rag.reindex, "_get_embed", return_value=fake_emb), \
+         patch.object(rag.reindex, "_get_task_store", return_value=fake_store), \
+         patch.object(rag.reindex, "_get_skill_store", return_value=fake_store), \
          patch("db.all_tasks_with_skill_md", return_value=fake_rows), \
          patch("db.update_embeddings"):
         result = rag.reindex_all_from_db()
@@ -176,7 +180,7 @@ def main():
     print(f"  ✓ R5-4: reindex of 25 tasks = 1 batched embed call (was 25 sequential before)")
 
     # ── R6-1: empty inputs preserve ordering (no batch misalignment) ──────
-    rag._EMBED = None
+    rag.embeddings._EMBED = None
     fake_resp = MagicMock()
     fake_resp.data = [
         MagicMock(embedding=[0.1] * 1024),
@@ -231,15 +235,15 @@ def main():
     fake_voyage_result = MagicMock()
     fake_voyage_result.results = [MagicMock(index=0, relevance_score=0.05)]  # very low!
     fake_voyage.rerank.return_value = fake_voyage_result
-    rag._RERANK_CLIENT = fake_voyage
-    rag._RERANK_INIT_TRIED = True
+    rag.rerank._RERANK_CLIENT = fake_voyage
+    rag.rerank._RERANK_INIT_TRIED = True
 
     fake_pgv_result = [
         (MagicMock(page_content="weakly related doc", metadata={"task_id": "t99"}), 0.30),
     ]
     fake_skill_store = MagicMock()
     fake_skill_store.similarity_search_with_score.return_value = fake_pgv_result
-    with patch.object(rag, "_get_skill_store", return_value=fake_skill_store):
+    with patch.object(rag.retrieve, "_get_skill_store", return_value=fake_skill_store):
         # rerank_min=0.30 → 0.05 should be rejected
         m = rag.find_matching_skill("query", top_k=1, distance_max=0.40, rerank_min=0.30)
         assert m is None, f"R6-3: rerank=0.05 below threshold 0.30 must reject, got {m}"
@@ -271,8 +275,11 @@ def main():
     fake_store = MagicMock()
     fake_store.add_texts.side_effect = Exception("simulated PGVector failure")
     update_called = []
-    with patch.object(rag, "_get_embed", return_value=fake_emb), \
-         patch.object(rag, "_get_task_store", return_value=fake_store), \
+    # rag.index_task lives in rag.index after the split; the bound
+    # `_get_embed` / `_get_task_store` references inside it are the
+    # rag.index module attributes we need to patch.
+    with patch.object(rag.index, "_get_embed", return_value=fake_emb), \
+         patch.object(rag.index, "_get_task_store", return_value=fake_store), \
          patch("db.update_embeddings", side_effect=lambda *a, **kw: update_called.append((a, kw))), \
          patch("psycopg2.connect", side_effect=_fake_psycopg2_connect):
         rag.index_task("t_partial", "goal", "summary")
