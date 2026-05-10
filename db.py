@@ -18,7 +18,37 @@ from typing import Any, Iterator
 import psycopg2
 import psycopg2.extras
 
-_LOCK = threading.RLock()
+_LOCK = threading.RLock()  # kept for legacy direct callers; new code uses _POOL
+
+# V3.5 E5: ThreadedConnectionPool replaces per-call psycopg2.connect. The
+# previous design serialized every DB call through a global RLock — under
+# concurrent DAG step events this caused observed 6.27s wall time on parallel
+# workloads (gaps L2 + L3). Pool size tuned for our task volume; bump if
+# Supabase shows connection-limit pressure.
+_POOL: "psycopg2.pool.ThreadedConnectionPool | None" = None
+
+
+def _get_pool():
+    global _POOL
+    if _POOL is None:
+        from psycopg2 import pool as _pool
+        _POOL = _pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=8,
+            dsn=_get_dsn(),
+            connect_timeout=10,
+        )
+    return _POOL
+
+
+def _close_pool():
+    global _POOL
+    if _POOL is not None:
+        try:
+            _POOL.closeall()
+        except Exception:
+            pass
+        _POOL = None
 
 
 def _get_dsn() -> str:
@@ -49,31 +79,49 @@ def init_db() -> None:
 
 @contextmanager
 def _conn() -> Iterator[psycopg2.extensions.connection]:
-    """Per-call connection with bounded retry. Supabase free tier occasionally
-    drops idle connections; one network blip shouldn't fail a task. Retries
-    only the CONNECT phase — retrying mid-transaction would risk side effects."""
+    """V3.5 E5: pool-backed connection. Pool reuse removes the global-lock
+    serialization that was the root cause of the 6.27s parallel-DAG hot-spot.
+    Bounded retry on transient errors stays — Supabase free tier still drops
+    idle conns occasionally."""
     delays = [0.0, 0.5, 1.5]
-    with _LOCK:
-        last_exc: Exception | None = None
-        c: psycopg2.extensions.connection | None = None
-        for delay in delays:
-            if delay:
-                time.sleep(delay)
-            try:
-                c = psycopg2.connect(_get_dsn(), connect_timeout=10)
-                last_exc = None
-                break
-            except psycopg2.OperationalError as e:
-                last_exc = e
-                print(f"[db] transient connect error (will retry): {e}")
-        if c is None:
-            assert last_exc is not None
-            raise last_exc
+    pool = _get_pool()
+    last_exc: Exception | None = None
+    c: psycopg2.extensions.connection | None = None
+    for delay in delays:
+        if delay:
+            time.sleep(delay)
         try:
-            yield c
-            c.commit()
-        finally:
-            c.close()
+            c = pool.getconn()
+            # Sanity check — if the pool handed us a closed/broken conn
+            # (Supabase idle-disconnect), discard and retry.
+            if c.closed != 0:
+                pool.putconn(c, close=True)
+                c = None
+                raise psycopg2.OperationalError("pool returned closed conn")
+            last_exc = None
+            break
+        except (psycopg2.OperationalError, Exception) as e:
+            # PoolError("connection pool exhausted") is also transient under load
+            last_exc = e
+            print(f"[db] pool getconn transient error (will retry): {e}")
+            c = None
+    if c is None:
+        assert last_exc is not None
+        raise last_exc
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            pool.putconn(c)
+        except Exception as e:
+            print(f"[db] pool putconn failed: {e}")
 
 
 def upsert_task(state) -> None:
@@ -124,6 +172,32 @@ def append_log(task_id: str, kind: str, payload: dict, ts: float | None = None) 
             "INSERT INTO log_entries (task_id, ts, kind, payload) VALUES (%s,%s,%s,%s::jsonb)",
             (task_id, ts, kind, json.dumps(payload)),
         )
+
+
+def append_log_batch(rows: list[tuple]) -> int:
+    """V3.5 E5: bulk INSERT for log_entries. The hot path during a DAG run
+    fires 30+ events per task; previously each was a single round-trip to
+    Supabase plus a global RLock. With this batched path the task_store
+    flusher coalesces 50-200 rows per round-trip — the difference between
+    serialized (6.27s parallel-DAG observed) and pool-friendly throughput.
+
+    Each row is (task_id, ts, kind, payload_dict). payload is JSON-serialized
+    here so the caller can buffer plain dicts."""
+    if not rows:
+        return 0
+    serialized = [
+        (tid, ts if ts is not None else time.time(), kind, json.dumps(payload))
+        for (tid, ts, kind, payload) in rows
+    ]
+    with _conn() as c, c.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO log_entries (task_id, ts, kind, payload) VALUES %s",
+            serialized,
+            template="(%s, %s, %s, %s::jsonb)",
+            page_size=200,
+        )
+    return len(serialized)
 
 
 def load_task(task_id: str) -> dict | None:

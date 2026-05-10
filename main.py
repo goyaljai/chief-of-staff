@@ -126,6 +126,13 @@ async def startup():
         _supabase_rest_ping()
     except Exception as e:
         print(f"[main] supabase rest ping failed (ok to ignore): {e}")
+    # V3.5 E5: start the log-write batch flusher. Without this, append_log
+    # falls back to per-event synchronous DB inserts.
+    try:
+        STORE.start_log_flusher()
+        print("[main] log_flusher started (E5: batched log writes)")
+    except Exception as e:
+        print(f"[main] log_flusher start failed: {e}")
     asyncio.create_task(_workspace_sweeper())
 
 

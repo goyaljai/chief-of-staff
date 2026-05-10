@@ -35,10 +35,4 @@ Reject these as "done":
 
 _(Sorted by frequency across runs — patterns hit more often appear first. `[×N]` shows how many tasks have promoted this lesson.)_
 
-- Test pattern with proper Case for URLs.  _(applies_to: code)_
-- Always include a verification command in the brief that the executor can run to prove the deliverable works.  _(applies_to: code, ops)_
-- **fix:** Phrase the verification as a single bash command whose exit code or stdout makes pass/fail unambiguous.
-- When the primary deliverable is a document, review against the artifact itself rather than relying on the executor's summary of what it contains.  _(applies_to: writing, research, ops)_
-- **fix:** Request or inspect the full document text and verify each required section and claim directly against the brief before passing.
-- When a task requires one deliverable to depend on another, brief and review for code-level reuse of the upstream logic rather than accepting duplicated behavior that merely produces the same output.  _(applies_to: code, data)_
-- **fix:** Require the downstream artifact to import or call the upstream module/function directly and verify that dependency in the final artifact or run evidence.
+- When the deliverable is a buildable app (Android/iOS/web/native), the final summary MUST include the exact local-machine setup steps the user needs to run it themselves: required env vars (ANDROID_HOME, JAVA_HOME, etc.), config files to write (local.properties, .env), and the run command(s) ending in something like "npm run android" or "./gradlew assembleDebug".  _(applies_to: code, ops)_

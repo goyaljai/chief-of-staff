@@ -119,6 +119,52 @@ class TaskStore:
         self._tasks: dict[str, TaskState] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._runners: dict[str, Any] = {}
+        # V3.5 E5: log-write batching. Buffer entries here; an async flusher
+        # coalesces them into a single multi-row INSERT every ~200ms or when
+        # buffer hits 50 entries. Removes the synchronous DB round-trip from
+        # the hot path that fires 30+ events per DAG step.
+        import threading as _th
+        self._log_buf: list[tuple] = []  # (tid, ts, kind, payload_dict)
+        self._log_buf_lock = _th.Lock()
+        self._flusher_task: asyncio.Task | None = None
+
+    def start_log_flusher(self) -> None:
+        """Idempotent: kick off the background flush coroutine. Call from
+        FastAPI startup hook (after the asyncio loop exists)."""
+        if self._flusher_task is not None and not self._flusher_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop yet — caller must invoke after startup
+        self._flusher_task = loop.create_task(self._flush_loop())
+
+    async def _flush_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(0.2)
+                await self._flush_log_buffer()
+        except asyncio.CancelledError:
+            await self._flush_log_buffer()  # final flush on shutdown
+            raise
+
+    async def _flush_log_buffer(self) -> None:
+        with self._log_buf_lock:
+            if not self._log_buf:
+                return
+            batch = self._log_buf[:]
+            self._log_buf.clear()
+        try:
+            n = db.append_log_batch(batch)
+            if n > 50:
+                print(f"[task_store] flushed {n} log entries in one batch")
+        except Exception as e:
+            # Re-buffer on failure so we don't lose entries; trim if absurd.
+            with self._log_buf_lock:
+                self._log_buf = batch + self._log_buf
+                if len(self._log_buf) > 5000:
+                    self._log_buf = self._log_buf[-5000:]
+            print(f"[task_store] log batch flush failed: {e}")
 
     def create(self, goal: str, clarifications: dict[str, str], workspace: str) -> TaskState:
         tid = uuid.uuid4().hex[:12]
@@ -138,10 +184,18 @@ class TaskStore:
             return
         entry.setdefault("ts", time.time())
         self._tasks[tid].log.append(entry)
-        try:
-            db.append_log(tid, entry.get("kind", "?"), entry, entry.get("ts"))
-        except Exception:
-            pass
+        # V3.5 E5: queue for batched DB write instead of synchronous insert.
+        # The flusher coroutine coalesces these every ~200ms.
+        with self._log_buf_lock:
+            self._log_buf.append((tid, entry.get("ts"), entry.get("kind", "?"), entry))
+            buf_size = len(self._log_buf)
+        # Eager flush if buffer is getting big (under heavy DAG load).
+        if buf_size >= 100:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._flush_log_buffer())
+            except RuntimeError:
+                pass
         for q in list(self._subscribers.get(tid, [])):
             try:
                 q.put_nowait(entry)

@@ -64,6 +64,11 @@ jobs:
       - name: critical fixes regression (D5 case, D6 unique ws, D7 auth, length caps)
         run: python eval/test_critical_fixes.py
 
+      - name: E5 perf regression (pool + batched log writes)
+        env:
+          COS_ALLOW_DESTRUCTIVE_TESTS: "1"
+        run: python eval/test_e5_perf.py
+
       - name: DAG executor parallel/topology tests
         run: python eval/test_dag_parallel.py
 
