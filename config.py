@@ -17,12 +17,13 @@ DATABRICKS_MODEL = os.environ.get("DATABRICKS_MODEL", "databricks-gpt-5-4")
 
 if not DATABRICKS_TOKEN or not DATABRICKS_BASE_URL:
     import sys
+    # Warn but do NOT exit — unit tests / CI / tooling don't need live LLM
+    # creds at import time. The actual `_chat()` call will surface the missing
+    # secret if anyone tries to use it without configuring Databricks.
     sys.stderr.write(
-        "ERROR: DATABRICKS_TOKEN and DATABRICKS_BASE_URL must be set as environment variables.\n"
-        "  export DATABRICKS_TOKEN='...'\n"
-        "  export DATABRICKS_BASE_URL='https://your-workspace.gcp.databricks.com/ai-gateway/mlflow/v1'\n"
+        "[config] WARNING: DATABRICKS_TOKEN/DATABRICKS_BASE_URL unset. "
+        "LLM calls will fail until set. Tests/imports continue.\n"
     )
-    sys.exit(1)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_ALLOWED_USER_IDS = {
