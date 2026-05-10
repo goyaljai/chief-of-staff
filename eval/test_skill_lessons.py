@@ -161,6 +161,17 @@ def main():
         assert pos_high < pos_low, "B3: high-frequency lesson must appear before low-frequency"
         print("✓ _load_skills places high-frequency lesson before low-frequency (B3)")
 
+        # 7. Round-3 fix #12: bootstrap MUST NOT re-import "  - **fix:** ..."
+        # sub-bullets as standalone patterns. Truncate then re-bootstrap from
+        # the freshly-rendered global.md and confirm zero garbage entries.
+        _truncate_lessons()
+        re_imported = bootstrap_skill_lessons_from_md()
+        assert re_imported > 0, "expected re-bootstrap to import lessons"
+        bad = [l for l in db.list_skill_lessons(limit=100)
+               if l["pattern"].startswith("**fix:**") or "**fix:**" in l["pattern"][:30]]
+        assert not bad, f"bootstrap re-imported remediation as patterns: {bad}"
+        print(f"✓ Bootstrap re-import: {re_imported} clean lessons, zero **fix:** garbage")
+
         print("\n" + "=" * 60)
         print("B2 + B3 ACCEPTANCE: PASS ✓")
         print("=" * 60)

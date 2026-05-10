@@ -205,7 +205,10 @@ class TaskStore:
         self._subscribers.setdefault(tid, []).append(q)
         s = self._tasks.get(tid)
         if s:
-            for entry in s.log[-30:]:
+            # V3.5 round-3 fix #9: use the smart log_tail (drops dag_step_event
+            # flood) so new SSE clients don't get spammed with 30 step events
+            # and miss the actual phase / final_review / correction signal.
+            for entry in _build_log_tail(s.log):
                 try:
                     q.put_nowait(entry)
                 except asyncio.QueueFull:

@@ -156,8 +156,34 @@ class ClaudeRunner:
         )
 
     def interrupt(self):
-        if self._process and self._process.returncode is None:
+        """V3.5 round-3 fix #11: SIGTERM, then escalate to SIGKILL in 5s if
+        the process still hasn't exited. Prevents zombie Claude subprocesses
+        when the CLI is stuck in a heavy build / hung syscall and ignores
+        SIGTERM. Best-effort — works whether or not we're inside an event loop."""
+        if not self._process or self._process.returncode is not None:
+            return
+        try:
             self._process.terminate()
+        except ProcessLookupError:
+            return
+        # Schedule the escalation. If we're inside a running event loop, fire
+        # an async timer; otherwise rely on the caller's `wait()` + 10s timeout
+        # in run() that already escalates via interrupt() recursion (idempotent).
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_later(5.0, self._escalate_kill)
+        except RuntimeError:
+            pass  # no loop running — sync context, escalation deferred to run()'s wait
+
+    def _escalate_kill(self):
+        if self._process and self._process.returncode is None:
+            try:
+                print(f"[runner] SIGTERM ignored after 5s — sending SIGKILL")
+                self._process.kill()
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                print(f"[runner] SIGKILL failed: {e}")
 
     def _build_command(self, prompt: str, session_id: str | None) -> list[str]:
         tools_str = ",".join(ALLOWED_TOOLS)

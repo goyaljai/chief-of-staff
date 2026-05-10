@@ -322,7 +322,10 @@ def bootstrap_skill_lessons_from_md() -> int:
     if LEARNED_HEADER not in text:
         return 0
     _, _, tail = text.partition(LEARNED_HEADER)
-    lines = [l.strip() for l in tail.splitlines() if l.strip().startswith("- ")]
+    # V3.5 round-3 fix #12: only top-level bullets are patterns. Skip indented
+    # sub-bullets like "  - **fix:** ..." (remediation) — bootstrapping those
+    # as patterns corrupts the lessons table after a wipe + re-import cycle.
+    lines = [l.strip() for l in tail.splitlines() if l.startswith("- ")]
     imported = 0
     for line in lines:
         pat = line.lstrip("-").strip()

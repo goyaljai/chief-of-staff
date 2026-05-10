@@ -237,6 +237,12 @@ async def execute_dag(
     if not steps:
         return {"ok": True, "results": {}, "failed": []}
 
+    # V3.5 round-3 fix #10: bound the DAG so an LLM-hallucinated 1000-step
+    # brief can't OOM us or blow past the LangGraph recursion limit.
+    if len(steps) > 50:
+        return {"ok": False, "error": f"dag has too many steps ({len(steps)}; max 50)",
+                "results": {}, "failed": [s["id"] for s in steps]}
+
     try:
         _validate_dag(steps)
     except ValueError as e:
