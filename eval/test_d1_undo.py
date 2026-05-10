@@ -113,6 +113,48 @@ def main():
         f"undo should restore the FIRST captured original, got {multi.read_text()!r}"
     print("  ✓ Repeated writes to same path deduped — true ORIGINAL restored")
 
+    # 8. R4-3 fix: binary files are detected and never decoded as text.
+    snap_file.unlink(missing_ok=True)
+    bin_path = ws / "image.png"
+    # PNG header + null-byte payload (definitely binary)
+    bin_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00\x01\x02\xff" * 100)
+    _maybe_snapshot_for_undo("Write", {"file_path": str(bin_path)}, str(ws))
+    bin_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xab" * 200)  # Claude rewrites
+    entries = [json.loads(l) for l in snap_file.read_text().splitlines() if l.strip()]
+    assert entries[0]["is_binary"], "binary content must be flagged is_binary=True"
+    assert entries[0]["truncated"], "binary content must be marked truncated (we don't store it)"
+    assert entries[0]["original"] == "", "binary content must NOT be stored as a string"
+    # Undo should NOT touch the binary file (would corrupt it)
+    pre_undo = bin_path.read_bytes()
+    _undo_handler(tid)
+    assert bin_path.read_bytes() == pre_undo, "binary file must be left alone by undo"
+    print("  ✓ R4-3: binary file detected, marked truncated, not corrupted by undo")
+
+    # 9. R4-4 fix: concurrent writers produce intact JSONL via fcntl.flock
+    snap_file.unlink(missing_ok=True)
+    import threading
+    paths_written = [ws / f"concurrent_{i}.txt" for i in range(20)]
+    for p in paths_written:
+        p.write_text(f"orig {p.name}")
+
+    def _worker(p):
+        _maybe_snapshot_for_undo("Edit", {"file_path": str(p)}, str(ws))
+
+    threads = [threading.Thread(target=_worker, args=(p,)) for p in paths_written]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    raw_lines = snap_file.read_text().splitlines()
+    parsed = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        parsed.append(json.loads(line))  # MUST not raise — no torn lines
+    assert len(parsed) == 20, f"expected 20 intact entries; got {len(parsed)}"
+    seen_paths = {e["path"] for e in parsed}
+    assert len(seen_paths) == 20, "all 20 distinct paths must be present"
+    print(f"  ✓ R4-4: 20 concurrent hook writes produce 20 intact JSONL entries (no torn lines)")
+
     # cleanup
     shutil.rmtree(ws, ignore_errors=True)
     Path(outside_path).unlink(missing_ok=True)

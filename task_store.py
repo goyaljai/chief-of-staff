@@ -155,7 +155,12 @@ class TaskStore:
             batch = self._log_buf[:]
             self._log_buf.clear()
         try:
-            n = db.append_log_batch(batch)
+            # V3.5 R4-1 fix: db.append_log_batch is SYNC psycopg2 — running it
+            # in the event loop blocks every other coroutine for ~100ms per
+            # flush. asyncio.to_thread offloads to a worker so the loop stays
+            # snappy. This is what makes E5 actually deliver perf, not just
+            # batch.
+            n = await asyncio.to_thread(db.append_log_batch, batch)
             if n > 50:
                 print(f"[task_store] flushed {n} log entries in one batch")
         except Exception as e:

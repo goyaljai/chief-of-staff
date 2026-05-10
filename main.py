@@ -178,6 +178,16 @@ async def _drain_inflight() -> None:
     for state in list(STORE.all()):
         if state.status in ("done", "failed", "abandoned", "cancelled"):
             continue
+        # V3.5 R4-2 fix: also interrupt the SEQUENTIAL-path runner (registered
+        # via STORE.register_runner). Without this, sequential-loop tasks
+        # (non-DAG) never receive a kill signal at shutdown — they keep
+        # streaming Claude events until the main process is force-killed.
+        try:
+            seq_runner = STORE._runners.get(state.id)
+            if seq_runner is not None:
+                seq_runner.interrupt()
+        except Exception as e:
+            print(f"[shutdown] seq_runner.interrupt({state.id}) failed: {e}")
         try:
             dag_executor.interrupt_all_for(state.id)
         except Exception as e:

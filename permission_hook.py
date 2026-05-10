@@ -33,6 +33,22 @@ WRITE_TOOLS = {"Write", "Edit", "MultiEdit"}
 _MAX_SNAPSHOT_BYTES = 256 * 1024  # 256KB
 
 
+def _is_probably_binary(data: bytes) -> bool:
+    """V3.5 R4-3 fix: detect binary content so we don't lossy-decode .aar /
+    .apk / images / etc. into a text snapshot — undo would then write the
+    corrupted text version back, destroying the file.
+
+    Heuristic: any null byte in the first 8KB is a strong binary signal."""
+    if b"\x00" in data[:8192]:
+        return True
+    # Also treat anything that fails strict UTF-8 decoding as binary.
+    try:
+        data.decode("utf-8")
+        return False
+    except UnicodeDecodeError:
+        return True
+
+
 def _maybe_snapshot_for_undo(tool_name: str, tool_input: dict, workspace: str) -> None:
     """Append a snapshot entry to <workspace>/.cos_snapshots.jsonl for any
     Write/Edit/MultiEdit (or their MCP equivalents) so /task/{id}/undo can
@@ -55,7 +71,6 @@ def _maybe_snapshot_for_undo(tool_name: str, tool_input: dict, workspace: str) -
         p = _P(path)
         if not p.is_absolute():
             p = _P(workspace) / path
-        # Confine to workspace — never snapshot anything outside.
         try:
             p.resolve().relative_to(_P(workspace).resolve())
         except (ValueError, OSError):
@@ -64,13 +79,22 @@ def _maybe_snapshot_for_undo(tool_name: str, tool_input: dict, workspace: str) -
         original = ""
         truncated = False
         size = 0
+        is_binary = False
         if existed:
             try:
                 size = p.stat().st_size
-                if size <= _MAX_SNAPSHOT_BYTES:
-                    original = p.read_text(errors="replace")
-                else:
+                if size > _MAX_SNAPSHOT_BYTES:
                     truncated = True
+                else:
+                    raw = p.read_bytes()
+                    # R4-3 fix: detect binary BEFORE decoding. We never store
+                    # binary content as a string — undo treats binary as
+                    # "skip" rather than risk corruption.
+                    if _is_probably_binary(raw):
+                        is_binary = True
+                        truncated = True
+                    else:
+                        original = raw.decode("utf-8")
             except Exception:
                 truncated = True
         snap = {
@@ -81,10 +105,28 @@ def _maybe_snapshot_for_undo(tool_name: str, tool_input: dict, workspace: str) -
             "original_size": size,
             "original": "" if truncated else original,
             "truncated": truncated,
+            "is_binary": is_binary,
         }
+        # R4-4 fix: parallel DAG step subprocesses share the same workspace
+        # (per the round-3 fix #8). Without a lock they can interleave JSON
+        # lines into .cos_snapshots.jsonl and produce torn entries that
+        # `/undo` then rejects. fcntl.flock serializes appends across
+        # processes (POSIX-only, which matches our deployment).
         snap_path = _P(workspace) / ".cos_snapshots.jsonl"
-        with open(snap_path, "a") as f:
-            f.write(json.dumps(snap) + "\n")
+        try:
+            import fcntl as _fcntl
+            with open(snap_path, "a") as f:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+                try:
+                    f.write(json.dumps(snap) + "\n")
+                    f.flush()
+                finally:
+                    _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
+        except Exception:
+            # Non-POSIX or fcntl unavailable — fall back to plain append.
+            # Concurrent writes still risk torn lines but it's all we can do.
+            with open(snap_path, "a") as f:
+                f.write(json.dumps(snap) + "\n")
     except Exception as e:
         sys.stderr.write(f"hook: snapshot capture failed (non-fatal): {e}\n")
 
