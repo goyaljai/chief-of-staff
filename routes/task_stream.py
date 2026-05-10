@@ -12,7 +12,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from task_store import STORE
+from persistence import STORE
 
 
 task_stream_router = APIRouter(tags=["task"])

@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 
 from routes.schemas import EscalationAnswer, NoteRequest
 from supervisor_loop import run_task
-from task_store import STORE
+from persistence import STORE
 
 
 task_lifecycle_router = APIRouter(tags=["task"])

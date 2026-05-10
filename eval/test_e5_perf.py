@@ -30,8 +30,8 @@ async def main():
         print("[skip] set COS_ALLOW_DESTRUCTIVE_TESTS=1 or use a local/test DSN")
         return
 
-    import db
-    from task_store import TaskStore, TaskState
+    import persistence as db
+    from persistence import TaskStore, TaskState
 
     print("=" * 60)
     print("E5 PERF REGRESSION TEST")

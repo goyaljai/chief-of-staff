@@ -28,7 +28,7 @@ import hmac as _hmac
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-import db
+import persistence as db
 
 
 # ─── auth gate ────────────────────────────────────────────────────────────

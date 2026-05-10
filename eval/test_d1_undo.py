@@ -59,7 +59,7 @@ def main():
 
     # 3. Simulate the /undo endpoint logic inline
     from routes.undo import undo_task as _undo_handler
-    from task_store import STORE, TaskState
+    from persistence import STORE, TaskState
 
     tid = f"d1_test_{uuid.uuid4().hex[:6]}"
     state = TaskState(id=tid, goal="d1 test", clarifications={}, workspace=str(ws))

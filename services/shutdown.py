@@ -23,8 +23,8 @@ Public API:
 import asyncio
 import time
 
-import db
-from task_store import STORE
+import persistence as db
+from persistence import STORE
 
 
 # Module-level flag. Read via IS_SHUTTING_DOWN() so callers don't import

@@ -164,8 +164,8 @@ def main():
     with patch.object(rag.reindex, "_get_embed", return_value=fake_emb), \
          patch.object(rag.reindex, "_get_task_store", return_value=fake_store), \
          patch.object(rag.reindex, "_get_skill_store", return_value=fake_store), \
-         patch("db.all_tasks_with_skill_md", return_value=fake_rows), \
-         patch("db.update_embeddings"):
+         patch("persistence.all_tasks_with_skill_md", return_value=fake_rows), \
+         patch("persistence.update_embeddings"):
         result = rag.reindex_all_from_db()
 
     # The KEY assertion: embed_documents called ONCE for tasks (batch),
@@ -280,7 +280,7 @@ def main():
     # rag.index module attributes we need to patch.
     with patch.object(rag.index, "_get_embed", return_value=fake_emb), \
          patch.object(rag.index, "_get_task_store", return_value=fake_store), \
-         patch("db.update_embeddings", side_effect=lambda *a, **kw: update_called.append((a, kw))), \
+         patch("persistence.update_embeddings", side_effect=lambda *a, **kw: update_called.append((a, kw))), \
          patch("psycopg2.connect", side_effect=_fake_psycopg2_connect):
         rag.index_task("t_partial", "goal", "summary")
 

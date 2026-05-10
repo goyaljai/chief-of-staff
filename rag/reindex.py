@@ -13,7 +13,7 @@ Databricks gateway limit), then write rows.
 Side effect: PGVector's `add_texts` is also called batch-wise so we're
 not paying the connection-per-row cost there either.
 """
-import db
+import persistence as db
 
 from .embeddings import _get_embed
 from ._stores import _get_task_store, _get_skill_store

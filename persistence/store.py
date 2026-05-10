@@ -1,13 +1,34 @@
-"""Task state store. V2.5: persists to SQLite via db.py.
-Also holds in-memory: SSE subscribers, runner registry for cancel, escalation events.
+"""In-memory task store + log buffer flusher.
+
+This is the merge point between the in-memory representation that route
+handlers and the supervisor loop work against and the Postgres rows that
+survive restarts. Boot path:
+
+  1. main.startup → STORE.hydrate_from_db() pulls every task whose status
+     was non-terminal at last shutdown and re-instantiates a TaskState.
+     In-flight statuses are coerced to 'interrupted' so the user can /resume.
+  2. STORE.start_log_flusher() kicks off the E5 batched-write coroutine.
+     Per-event writes used to be one synchronous round-trip each; the
+     flusher coalesces 50-200 entries into a single execute_values call.
+  3. From here on, every call to append_log buffers locally and the
+     flusher pushes to Postgres every ~200ms (or on a 100-entry threshold).
+
+Public API:
+  TaskState           — dataclass holding all per-task state
+  TaskStore           — the in-mem store class (one instance: STORE)
+  STORE               — the singleton
+  _build_log_tail(log) — smart 60-entry tail (drops dag_step flood)
+  _build_dag_progress(log) — per-step summary for the dashboard
 """
 import asyncio
+import json
 import time
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-import db
+from . import tasks_repo
 
 
 @dataclass
@@ -66,7 +87,7 @@ class TaskState:
         }
 
 
-# ---------- V3.5 E7: smart log_tail + dag_progress ----------
+# ─── log-tail builder (E7: drops dag_step flood) ─────────────────────────
 
 _LOG_TAIL_MAX = 60
 _LOG_TAIL_STEP_PER_ID = 5
@@ -74,10 +95,11 @@ _LOG_TAIL_WINDOW = 250
 
 
 def _build_log_tail(log: list[dict]) -> list[dict]:
-    """Build a 60-entry tail that keeps ALL recent non-step events plus at most
-    5 dag_step_event entries per step_id. Without this, a long DAG run floods
-    log_tail with step events and the UI loses signal (phase/correction/error
-    entries get pushed out of the visible window and the page lags)."""
+    """Build a 60-entry tail that keeps ALL recent non-step events plus at
+    most 5 dag_step_event entries per step_id. Without this, a long DAG
+    run floods log_tail with step events and the UI loses signal (phase /
+    correction / error entries get pushed out of the visible window and
+    the page lags)."""
     if len(log) <= _LOG_TAIL_MAX:
         return list(log)
     window = log[-_LOG_TAIL_WINDOW:]
@@ -100,13 +122,17 @@ def _build_log_tail(log: list[dict]) -> list[dict]:
 
 def _build_dag_progress(log: list[dict]) -> dict:
     """Per-step summary: count of events, last event text, first-seen ts.
-    Cheap structured field for the dashboard list view ("step 2/3: building")
-    so the UI doesn't have to walk the log to figure out per-step state."""
+    Cheap structured field for the dashboard list view ("step 2/3:
+    building") so the UI doesn't have to walk the log to figure out
+    per-step state."""
     progress: dict[str, dict] = {}
     for e in log:
         if e.get("kind") == "dag_step_event" and e.get("step_id"):
             sid = e["step_id"]
-            p = progress.setdefault(sid, {"count": 0, "started_at": e.get("ts"), "last": ""})
+            p = progress.setdefault(
+                sid,
+                {"count": 0, "started_at": e.get("ts"), "last": ""},
+            )
             p["count"] += 1
             t = e.get("text") or e.get("tool") or ""
             if t:
@@ -114,18 +140,19 @@ def _build_dag_progress(log: list[dict]) -> dict:
     return progress
 
 
+# ─── the store ───────────────────────────────────────────────────────────
+
 class TaskStore:
     def __init__(self):
         self._tasks: dict[str, TaskState] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         self._runners: dict[str, Any] = {}
-        # V3.5 E5: log-write batching. Buffer entries here; an async flusher
-        # coalesces them into a single multi-row INSERT every ~200ms or when
-        # buffer hits 50 entries. Removes the synchronous DB round-trip from
-        # the hot path that fires 30+ events per DAG step.
-        import threading as _th
+        # E5: log-write batching. Buffer entries here; an async flusher
+        # coalesces them into a single multi-row INSERT every ~200ms or
+        # when the buffer hits 100 entries. Removes the synchronous DB
+        # round-trip from the hot path that fires 30+ events per DAG step.
         self._log_buf: list[tuple] = []  # (tid, ts, kind, payload_dict)
-        self._log_buf_lock = _th.Lock()
+        self._log_buf_lock = threading.Lock()
         self._flusher_task: asyncio.Task | None = None
 
     def start_log_flusher(self) -> None:
@@ -155,12 +182,10 @@ class TaskStore:
             batch = self._log_buf[:]
             self._log_buf.clear()
         try:
-            # V3.5 R4-1 fix: db.append_log_batch is SYNC psycopg2 — running it
-            # in the event loop blocks every other coroutine for ~100ms per
-            # flush. asyncio.to_thread offloads to a worker so the loop stays
-            # snappy. This is what makes E5 actually deliver perf, not just
-            # batch.
-            n = await asyncio.to_thread(db.append_log_batch, batch)
+            # R4-1: append_log_batch is sync psycopg2 — running it in the
+            # event loop blocks every other coroutine for ~100ms per flush.
+            # asyncio.to_thread offloads to a worker so the loop stays snappy.
+            n = await asyncio.to_thread(tasks_repo.append_log_batch, batch)
             if n > 50:
                 print(f"[task_store] flushed {n} log entries in one batch")
         except Exception as e:
@@ -173,7 +198,12 @@ class TaskStore:
 
     def create(self, goal: str, clarifications: dict[str, str], workspace: str) -> TaskState:
         tid = uuid.uuid4().hex[:12]
-        state = TaskState(id=tid, goal=goal, clarifications=clarifications, workspace=workspace)
+        state = TaskState(
+            id=tid,
+            goal=goal,
+            clarifications=clarifications,
+            workspace=workspace,
+        )
         self._tasks[tid] = state
         self._persist(state)
         return state
@@ -189,10 +219,11 @@ class TaskStore:
             return
         entry.setdefault("ts", time.time())
         self._tasks[tid].log.append(entry)
-        # V3.5 E5: queue for batched DB write instead of synchronous insert.
-        # The flusher coroutine coalesces these every ~200ms.
+        # E5: queue for batched DB write instead of synchronous insert.
         with self._log_buf_lock:
-            self._log_buf.append((tid, entry.get("ts"), entry.get("kind", "?"), entry))
+            self._log_buf.append(
+                (tid, entry.get("ts"), entry.get("kind", "?"), entry)
+            )
             buf_size = len(self._log_buf)
         # Eager flush if buffer is getting big (under heavy DAG load).
         if buf_size >= 100:
@@ -240,9 +271,9 @@ class TaskStore:
         s = self._tasks.get(tid)
         if not s or s.status != "escalated":
             return False
-        # V3.5 D5 fix: only lowercase the legacy 1-char a/b answers; preserve
-        # case for free-text directives (URLs, file paths, identifiers etc.
-        # were getting mangled — "Use HTTPS" → "use https").
+        # D5: only lowercase the legacy 1-char a/b answers; preserve case
+        # for free-text directives (URLs, file paths, identifiers etc. were
+        # getting mangled — "Use HTTPS" → "use https").
         stripped = (answer or "").strip()
         if len(stripped) <= 2:
             s.escalation_answer = stripped.lower()
@@ -264,9 +295,9 @@ class TaskStore:
         self._subscribers.setdefault(tid, []).append(q)
         s = self._tasks.get(tid)
         if s:
-            # V3.5 round-3 fix #9: use the smart log_tail (drops dag_step_event
-            # flood) so new SSE clients don't get spammed with 30 step events
-            # and miss the actual phase / final_review / correction signal.
+            # Round-3 fix #9: use the smart log_tail (drops dag_step flood)
+            # so new SSE clients don't get spammed with 30 step events and
+            # miss the actual phase / final_review / correction signal.
             for entry in _build_log_tail(s.log):
                 try:
                     q.put_nowait(entry)
@@ -294,9 +325,9 @@ class TaskStore:
                 interrupted_any = True
             except Exception:
                 pass
-        # V3.5 audit fix: also interrupt every live DAG step runner. Without
-        # this, /cancel returned ok=True while parallel subprocesses kept
-        # running because the supervisor's `self.runner` wasn't the one in use.
+        # Also interrupt every live DAG step runner. Without this, /cancel
+        # used to return ok=True while parallel subprocesses kept running
+        # because the supervisor's `self.runner` wasn't the one in use.
         try:
             import dag_executor
             n = dag_executor.interrupt_all_for(tid)
@@ -313,17 +344,17 @@ class TaskStore:
 
     def _persist(self, state: TaskState):
         try:
-            db.upsert_task(state)
+            tasks_repo.upsert_task(state)
         except Exception as e:
             print(f"[task_store] persist error: {e}")
 
     def hydrate_from_db(self):
-        """Load recent unfinished tasks from DB so /tasks shows them after restart."""
+        """Load recent unfinished tasks from DB so /tasks shows them after
+        restart."""
         try:
-            rows = db.list_tasks(limit=200)
+            rows = tasks_repo.list_tasks(limit=200)
         except Exception:
             return
-        import json as _json
 
         def _as_obj(v, default):
             # psycopg2 returns JSONB columns already-parsed (dict/list).
@@ -333,14 +364,14 @@ class TaskStore:
             if isinstance(v, (dict, list)):
                 return v
             try:
-                return _json.loads(v)
+                return json.loads(v)
             except Exception:
                 return default
 
         for r in rows:
             if r["id"] in self._tasks:
                 continue
-            full = db.load_task(r["id"])
+            full = tasks_repo.load_task(r["id"])
             if not full:
                 continue
             row = full["row"]
@@ -372,8 +403,9 @@ class TaskStore:
                 "reviewing_loop_1", "reviewing_loop_2", "reviewing_loop_3",
             )
             if in_flight:
-                # V3: don't auto-abandon. Mark as 'interrupted' and let the user decide
-                # via /task/{id}/resume to attempt a Claude --resume from the captured session_id.
+                # V3: don't auto-abandon. Mark 'interrupted' and let the
+                # user decide via /task/{id}/resume to attempt a Claude
+                # --resume from the captured session_id.
                 state.status = "interrupted"
             self._tasks[state.id] = state
 

@@ -7,7 +7,7 @@ it needs to render a task page.
 from fastapi import APIRouter, HTTPException
 
 from services.artifacts import list_artifacts, last_claude_output
-from task_store import STORE
+from persistence import STORE
 
 
 task_state_router = APIRouter(tags=["task"])

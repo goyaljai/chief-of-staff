@@ -26,7 +26,7 @@ import os
 
 import psycopg2
 
-import db
+import persistence as db
 
 from .embeddings import _get_embed
 from ._stores import _get_task_store, _get_skill_store

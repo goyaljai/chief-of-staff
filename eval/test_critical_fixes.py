@@ -19,7 +19,7 @@ def main():
     print("=" * 60)
 
     # 1. D5 case-preservation in answer_escalation
-    from task_store import TaskStore, TaskState
+    from persistence import TaskStore, TaskState
     store = TaskStore()
     s = TaskState(id="t1", goal="g", clarifications={}, workspace="/tmp/x")
     s.status = "escalated"

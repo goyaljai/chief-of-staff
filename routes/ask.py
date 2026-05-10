@@ -16,12 +16,12 @@ Two flavours:
 """
 from fastapi import APIRouter, HTTPException
 
-import db
+import persistence as db
 import rag
 from dependencies import orchestrator_singleton
+from persistence import STORE
 from routes.schemas import AskRequest
 from services.artifacts import list_artifacts, last_claude_output
-from task_store import STORE
 
 
 ask_router = APIRouter(tags=["ask"])

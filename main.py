@@ -40,9 +40,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-import db
+import persistence as db
 from config import STATIC_DIR
-from task_store import STORE
+from persistence import STORE
 
 from routes.admin import admin_router
 from routes.ask import ask_router

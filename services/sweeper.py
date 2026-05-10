@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import db
+import persistence as db
 from config import WORKSPACE_ROOT, WORKSPACE_TTL_DAYS
 
 

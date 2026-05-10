@@ -20,7 +20,7 @@ async def main():
     import main as srv  # noqa: F401 — kept for STORE access via srv.STORE
     import dag_executor
     import services.shutdown as shutdown_mod
-    from task_store import TaskState
+    from persistence import TaskState
 
     print("=" * 60)
     print("F1 GRACEFUL SHUTDOWN TEST")

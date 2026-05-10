@@ -16,7 +16,7 @@ import json
 import re
 from pathlib import Path
 
-import db
+import persistence as db
 from openai import (
     OpenAI,
     APIConnectionError,

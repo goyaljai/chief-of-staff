@@ -23,7 +23,7 @@ from dependencies import orchestrator_singleton, pop_preview
 from routes.schemas import TaskRunRequest
 from services.shutdown import IS_SHUTTING_DOWN
 from supervisor_loop import run_task
-from task_store import STORE, TaskState
+from persistence import STORE, TaskState
 
 
 task_run_router = APIRouter(tags=["task"])

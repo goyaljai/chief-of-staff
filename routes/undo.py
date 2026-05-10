@@ -25,7 +25,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from task_store import STORE
+from persistence import STORE
 
 
 # Defensive cap on per-call work — large undos run on the request thread

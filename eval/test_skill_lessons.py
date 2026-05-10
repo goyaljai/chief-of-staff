@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config  # noqa: F401
-import db
+import persistence as db
 import orchestrator
 from orchestrator import (
     GLOBAL_SKILL_PATH, LEARNED_HEADER, append_to_global,
