@@ -85,6 +85,12 @@ class ClaudeRunner:
         env["SUPERVISOR_HOOK_LOG"] = str(self.hook_log_path)
         env["SUPERVISOR_WORKSPACE"] = str(self.working_dir)
 
+        # V3.5 fix: default asyncio StreamReader limit is 64KB, which fails on
+        # `--output-format stream-json` lines that contain large tool_result
+        # chunks (e.g. workspace listings, big stdout). Bump to 64MB so single
+        # JSONL events of any reasonable size are read intact. Symptom without
+        # this: "Separator is not found, and chunk exceed the limit" → task
+        # killed mid-run.
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.DEVNULL,
@@ -92,6 +98,7 @@ class ClaudeRunner:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self.working_dir),
             env=env,
+            limit=64 * 1024 * 1024,
         )
         self._process = process
 

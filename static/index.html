@@ -184,6 +184,70 @@ function fmtCost(cost) {
   return `${t.toLocaleString()} tok · $${usd.toFixed(2)}`;
 }
 
+// V3.5 D8: render event stream with dag_step_event entries grouped per step.
+// Without this, a 50-event DAG run produces 50 flat <div>s and the page lags
+// hard on every poll/SSE tick. Now: non-step events stay flat; step events
+// collapse into a per-step <details> accordion with a counter and short summary.
+function escapeText(s) {
+  return String(s == null ? "" : s).replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+}
+function eventSummary(e) {
+  const s = e.text || e.tool || e.message || e.lessons || (typeof e.input === "object" ? JSON.stringify(e.input).slice(0,160) : "");
+  return escapeText(String(s).slice(0, 240));
+}
+function renderEventStream(entries) {
+  const flat = [];
+  const groups = {};
+  const order = [];
+  for (const e of entries) {
+    if (e.kind === "dag_step_event" && e.step_id) {
+      if (!groups[e.step_id]) { groups[e.step_id] = []; order.push(e.step_id); }
+      groups[e.step_id].push(e);
+    } else {
+      flat.push(e);
+    }
+  }
+  let html = flat.map(e => `<div class="stream-line text-slate-700">[${escapeText(e.kind)}] ${eventSummary(e)}</div>`).join("");
+  for (let i = 0; i < order.length; i++) {
+    const sid = order[i];
+    const evs = groups[sid];
+    const last = evs[evs.length-1];
+    const lastPreview = eventSummary(last).slice(0, 80);
+    const isOpen = i === order.length - 1; // auto-expand most recent step only
+    const inner = evs.map(e => `<div class="stream-line text-slate-600 text-xs">[${escapeText(e.kind)}] ${eventSummary(e)}</div>`).join("");
+    html += `<details ${isOpen ? "open" : ""} class="my-1 border-l-2 border-indigo-200 pl-2" data-step-id="${escapeText(sid)}">`
+         + `<summary class="cursor-pointer text-slate-700 font-semibold text-xs">▸ <span class="text-indigo-600">${escapeText(sid)}</span> <span class="text-slate-400 step-count">(${evs.length} events)</span> <span class="text-slate-400">— ${lastPreview}</span></summary>`
+         + `<div class="step-body mt-1">${inner}</div></details>`;
+  }
+  return html;
+}
+function appendStreamEntry(streamEl, entry) {
+  if (entry.kind === "dag_step_event" && entry.step_id) {
+    let group = streamEl.querySelector(`details[data-step-id="${entry.step_id}"]`);
+    if (!group) {
+      group = document.createElement("details");
+      group.open = true;
+      group.dataset.stepId = entry.step_id;
+      group.className = "my-1 border-l-2 border-indigo-200 pl-2";
+      group.innerHTML = `<summary class="cursor-pointer text-slate-700 font-semibold text-xs">▸ <span class="text-indigo-600">${escapeText(entry.step_id)}</span> <span class="text-slate-400 step-count">(0 events)</span></summary><div class="step-body mt-1"></div>`;
+      streamEl.appendChild(group);
+    }
+    const body = group.querySelector(".step-body");
+    const div = document.createElement("div");
+    div.className = "stream-line text-slate-600 text-xs";
+    div.textContent = `[${entry.kind}] ${(entry.text || entry.tool || entry.message || "").toString().slice(0,240)}`;
+    body.appendChild(div);
+    const count = group.querySelector(".step-count");
+    if (count) count.textContent = `(${body.children.length} events)`;
+  } else {
+    const div = document.createElement("div");
+    div.className = "stream-line text-slate-700";
+    const s = entry.text || entry.tool || entry.message || entry.lessons || (entry.input ? JSON.stringify(entry.input).slice(0,160) : "");
+    div.textContent = `[${entry.kind}] ${(s||"").toString().slice(0,240)}`;
+    streamEl.appendChild(div);
+  }
+}
+
 async function loadTasks() {
   const list = $("task-list");
   try {
@@ -450,7 +514,7 @@ async function showDetail(id) {
     <div class="bg-white border border-slate-200 rounded-lg p-4">
       <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Live event stream</div>
       <div id="event-stream" class="text-xs mono space-y-1 max-h-[500px] overflow-y-auto">
-        ${(state.log_tail||[]).map(e => `<div class="stream-line text-slate-700">[${e.kind}] ${(e.text||e.tool||e.message||e.lessons||"") + (typeof e.input === "object" ? " "+JSON.stringify(e.input).slice(0,160) : "")}</div>`).join("")}
+        ${renderEventStream(state.log_tail||[])}
       </div>
     </div>`}`;
 
@@ -517,11 +581,7 @@ async function showDetail(id) {
     es.addEventListener("log", (e) => {
       try {
         const entry = JSON.parse(e.data);
-        const div = document.createElement("div");
-        div.className = "stream-line text-slate-700";
-        const summary = entry.text || entry.tool || entry.message || entry.lessons || (entry.input ? JSON.stringify(entry.input).slice(0,160) : "");
-        div.textContent = `[${entry.kind}] ${summary||""}`;
-        stream.appendChild(div);
+        appendStreamEntry(stream, entry);
         stream.scrollTop = stream.scrollHeight;
       } catch {}
     });

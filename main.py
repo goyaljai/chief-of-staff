@@ -12,12 +12,25 @@ Endpoints:
   GET  /health                     → ok
   GET  /                           → redirects to /static/index.html (web UI)
 """
+import os
+from pathlib import Path
+
+# V3.5: load .env BEFORE any other import so LangChain/LangSmith tracing flags
+# are visible when langchain_* modules initialize their tracers at import time.
+_ENV_FILE = Path(__file__).parent / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        os.environ.setdefault(_k.strip(), _v.strip().strip("'\""))
+
 import asyncio
 import hashlib
 import json
 import shutil
 import time
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -95,7 +108,70 @@ async def startup():
     db.init_db()
     STORE.hydrate_from_db()
     print(f"[main] hydrated {len(STORE.all())} tasks from DB")
+    try:
+        from orchestrator import bootstrap_skill_lessons_from_md
+        bootstrap_skill_lessons_from_md()
+    except Exception as e:
+        print(f"[main] skill_lessons bootstrap failed: {e}")
+    # V3.5 C4: sweep stale workspaces immediately on boot, not just hourly.
+    # Short-lived servers (CI, local restarts) otherwise never run cleanup.
+    try:
+        _run_workspace_sweep_once()
+    except Exception as e:
+        print(f"[main] startup workspace sweep failed: {e}")
+    # V3.5: ping Supabase REST API so the dashboard's request counters show
+    # we're alive. psycopg2 over port 5432 doesn't register on the dashboard's
+    # Total Requests / Database Requests widgets (those count PostgREST hits).
+    try:
+        _supabase_rest_ping()
+    except Exception as e:
+        print(f"[main] supabase rest ping failed (ok to ignore): {e}")
     asyncio.create_task(_workspace_sweeper())
+
+
+def _supabase_rest_ping() -> None:
+    """One PostgREST GET at startup so Supabase dashboard sees traffic."""
+    import os, urllib.request, urllib.error
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SECRET_KEY") or os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
+    if not url or not key:
+        return
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/rest/v1/tasks?select=id&limit=1",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "User-Agent": "chief-of-staff/V2.5",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            print(f"[supabase] REST ping ok ({r.status}) — dashboard will now show 1+ requests")
+    except urllib.error.HTTPError as e:
+        # Even a 401/403 is a hit on the REST API and registers in metrics.
+        print(f"[supabase] REST ping returned {e.code} (still counts as a request)")
+
+
+def _run_workspace_sweep_once() -> int:
+    """Single-pass workspace cleanup. Reusable from the startup hook AND the
+    hourly background loop so the policy lives in one place."""
+    if WORKSPACE_TTL_DAYS <= 0:
+        return 0
+    max_age = WORKSPACE_TTL_DAYS * 86400
+    old = db.cleanup_old_workspaces(max_age)
+    swept = 0
+    for tid, ws in old:
+        if ws and Path(ws).exists():
+            try:
+                shutil.rmtree(ws, ignore_errors=True)
+                print(f"[sweeper] removed {ws} (task {tid})")
+                swept += 1
+            except Exception as e:
+                print(f"[sweeper] failed to remove {ws}: {e}")
+    if swept:
+        print(f"[sweeper] swept {swept} stale workspaces (TTL={WORKSPACE_TTL_DAYS}d)")
+    return swept
 
 
 async def _workspace_sweeper():
@@ -105,15 +181,7 @@ async def _workspace_sweeper():
     while True:
         try:
             await asyncio.sleep(3600)
-            max_age = WORKSPACE_TTL_DAYS * 86400
-            old = db.cleanup_old_workspaces(max_age)
-            for tid, ws in old:
-                if ws and Path(ws).exists():
-                    try:
-                        shutil.rmtree(ws, ignore_errors=True)
-                        print(f"[sweeper] removed {ws} (task {tid})")
-                    except Exception as e:
-                        print(f"[sweeper] failed to remove {ws}: {e}")
+            _run_workspace_sweep_once()
         except asyncio.CancelledError:
             break
         except Exception as e:

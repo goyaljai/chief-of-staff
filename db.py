@@ -1,95 +1,74 @@
-"""SQLite persistence layer for chief-of-staff V2.5.
+"""V3.5: Postgres-only persistence layer (no SQLite fallback).
 
-Tables:
-  tasks         — one row per task (state, costs, skill metadata)
+Tables (created via migrations/postgres_v3.sql):
+  tasks         — one row per task (with summary_embedding, skill_embedding columns)
   log_entries   — append-only event log per task
-  tasks_fts     — FTS5 index for keyword /ask retrieval
+
+Search:
+  pg_trgm + GIN indexes on goal/brief for keyword
+  pgvector cosine similarity on summary_embedding/skill_embedding for semantic
 """
 import json
-import sqlite3
+import os
 import threading
 import time
 from contextlib import contextmanager
-from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
-from config import DB_PATH
+import psycopg2
+import psycopg2.extras
 
 _LOCK = threading.RLock()
-_INIT_DONE = False
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,
-    goal TEXT,
-    clarifications TEXT,
-    workspace TEXT,
-    status TEXT,
-    skill_md TEXT,
-    skill_name TEXT,
-    skill_description TEXT,
-    brief TEXT,
-    result TEXT,
-    started_at REAL,
-    finished_at REAL,
-    cost_databricks_in INTEGER DEFAULT 0,
-    cost_databricks_out INTEGER DEFAULT 0,
-    cost_claude_usd REAL DEFAULT 0,
-    keep_workspace INTEGER DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS log_entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id TEXT,
-    ts REAL,
-    kind TEXT,
-    payload TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_log_task_ts ON log_entries(task_id, ts);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
-    id UNINDEXED,
-    goal,
-    brief,
-    skill_md,
-    summary,
-    tokenize='porter unicode61'
-);
-"""
+def _get_dsn() -> str:
+    """Read DATABASE_URL at call time, not module load time (config.py loads .env later)."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL not set. V3.5 requires Postgres + pgvector.")
+    return url
 
 
 def init_db() -> None:
-    global _INIT_DONE
-    if _INIT_DONE:
-        return
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(DB_PATH))
-    try:
-        c.executescript(_SCHEMA)
-        cur = c.execute("SELECT sql FROM sqlite_master WHERE name='tasks_fts'").fetchone()
-        if cur and "content=''" in (cur[0] or ""):
-            print("[db] migrating tasks_fts: dropping old contentless schema")
-            c.executescript("DROP TABLE tasks_fts; " + _SCHEMA.split("CREATE VIRTUAL TABLE")[1].replace("IF NOT EXISTS", "").strip())
-            c.execute("DELETE FROM tasks_fts")
-            for r in c.execute("SELECT id, goal, brief, skill_md, json_extract(result, '$.summary') AS summary FROM tasks"):
-                c.execute(
-                    "INSERT INTO tasks_fts (id, goal, brief, skill_md, summary) VALUES (?,?,?,?,?)",
-                    (r[0], r[1] or "", r[2] or "", r[3] or "", r[4] or ""),
-                )
-        c.commit()
-    finally:
-        c.close()
-    _INIT_DONE = True
+    """Verify Postgres connection + extensions. Schema must be applied via migrations/postgres_v3.sql."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("SELECT extname FROM pg_extension WHERE extname IN ('vector','pg_trgm');")
+        exts = {r[0] for r in cur.fetchall()}
+        missing = {"vector", "pg_trgm"} - exts
+        if missing:
+            raise RuntimeError(f"Postgres missing extensions: {missing}. Apply migrations/postgres_v3.sql.")
+        cur.execute("SELECT to_regclass('public.tasks');")
+        if cur.fetchone()[0] is None:
+            raise RuntimeError("Tables missing. Apply migrations/postgres_v3.sql.")
+        cur.execute("SELECT to_regclass('public.skill_lessons');")
+        if cur.fetchone()[0] is None:
+            raise RuntimeError(
+                "skill_lessons table missing. Apply migrations/postgres_v3_5_b2_skills.sql."
+            )
 
 
 @contextmanager
-def _conn() -> Iterator[sqlite3.Connection]:
-    init_db()
+def _conn() -> Iterator[psycopg2.extensions.connection]:
+    """Per-call connection with bounded retry. Supabase free tier occasionally
+    drops idle connections; one network blip shouldn't fail a task. Retries
+    only the CONNECT phase — retrying mid-transaction would risk side effects."""
+    delays = [0.0, 0.5, 1.5]
     with _LOCK:
-        c = sqlite3.connect(str(DB_PATH), timeout=10.0)
-        c.row_factory = sqlite3.Row
+        last_exc: Exception | None = None
+        c: psycopg2.extensions.connection | None = None
+        for delay in delays:
+            if delay:
+                time.sleep(delay)
+            try:
+                c = psycopg2.connect(_get_dsn(), connect_timeout=10)
+                last_exc = None
+                break
+            except psycopg2.OperationalError as e:
+                last_exc = e
+                print(f"[db] transient connect error (will retry): {e}")
+        if c is None:
+            assert last_exc is not None
+            raise last_exc
         try:
             yield c
             c.commit()
@@ -101,16 +80,26 @@ def upsert_task(state) -> None:
     summary = ""
     if state.result and isinstance(state.result, dict):
         summary = state.result.get("summary") or ""
-    with _conn() as c:
-        c.execute(
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
             """
-            INSERT OR REPLACE INTO tasks (
-                id, goal, clarifications, workspace, status,
-                skill_md, skill_name, skill_description, brief, result,
-                started_at, finished_at,
-                cost_databricks_in, cost_databricks_out, cost_claude_usd,
-                keep_workspace
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO tasks (id, goal, clarifications, workspace, status,
+                               skill_md, skill_name, skill_description, brief, result,
+                               started_at, finished_at,
+                               cost_databricks_in, cost_databricks_out, cost_claude_usd,
+                               keep_workspace)
+            VALUES (%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (id) DO UPDATE SET
+              goal=EXCLUDED.goal, clarifications=EXCLUDED.clarifications,
+              workspace=EXCLUDED.workspace, status=EXCLUDED.status,
+              skill_md=EXCLUDED.skill_md, skill_name=EXCLUDED.skill_name,
+              skill_description=EXCLUDED.skill_description, brief=EXCLUDED.brief,
+              result=EXCLUDED.result, started_at=EXCLUDED.started_at,
+              finished_at=EXCLUDED.finished_at,
+              cost_databricks_in=EXCLUDED.cost_databricks_in,
+              cost_databricks_out=EXCLUDED.cost_databricks_out,
+              cost_claude_usd=EXCLUDED.cost_claude_usd,
+              keep_workspace=EXCLUDED.keep_workspace
             """,
             (
                 state.id, state.goal, json.dumps(state.clarifications), state.workspace, state.status,
@@ -119,52 +108,46 @@ def upsert_task(state) -> None:
                 state.brief,
                 json.dumps(state.result) if state.result else None,
                 state.started_at, state.finished_at,
-                int(getattr(state, "cost_databricks_in", 0)),
-                int(getattr(state, "cost_databricks_out", 0)),
-                float(getattr(state, "cost_claude_usd", 0.0)),
-                int(getattr(state, "keep_workspace", False)),
+                int(getattr(state, "cost_databricks_in", 0) or 0),
+                int(getattr(state, "cost_databricks_out", 0) or 0),
+                float(getattr(state, "cost_claude_usd", 0.0) or 0.0),
+                bool(getattr(state, "keep_workspace", False)),
             ),
-        )
-        c.execute("DELETE FROM tasks_fts WHERE id = ?", (state.id,))
-        c.execute(
-            "INSERT INTO tasks_fts (id, goal, brief, skill_md, summary) VALUES (?,?,?,?,?)",
-            (state.id, state.goal or "", state.brief or "", state.skill_md or "", summary),
         )
 
 
 def append_log(task_id: str, kind: str, payload: dict, ts: float | None = None) -> None:
     if ts is None:
         ts = time.time()
-    with _conn() as c:
-        c.execute(
-            "INSERT INTO log_entries (task_id, ts, kind, payload) VALUES (?,?,?,?)",
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "INSERT INTO log_entries (task_id, ts, kind, payload) VALUES (%s,%s,%s,%s::jsonb)",
             (task_id, ts, kind, json.dumps(payload)),
         )
 
 
 def load_task(task_id: str) -> dict | None:
-    with _conn() as c:
-        row = c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM tasks WHERE id = %s", (task_id,))
+        row = cur.fetchone()
         if not row:
             return None
-        logs = c.execute(
-            "SELECT ts, kind, payload FROM log_entries WHERE task_id = ? ORDER BY id",
-            (task_id,),
-        ).fetchall()
-        return {"row": dict(row), "logs": [dict(l) for l in logs]}
+        cur.execute("SELECT ts, kind, payload FROM log_entries WHERE task_id = %s ORDER BY id", (task_id,))
+        logs = [dict(r) for r in cur.fetchall()]
+        return {"row": dict(row), "logs": logs}
 
 
 def list_tasks(limit: int = 200) -> list[dict]:
-    with _conn() as c:
-        rows = c.execute(
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
             """
             SELECT id, goal, status, workspace, started_at, finished_at,
                    cost_databricks_in, cost_databricks_out, cost_claude_usd
-            FROM tasks ORDER BY started_at DESC LIMIT ?
+            FROM tasks ORDER BY started_at DESC LIMIT %s
             """,
             (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 _FTS_STOPWORDS = {
@@ -176,92 +159,210 @@ _FTS_STOPWORDS = {
 }
 
 
-def _sanitize_fts(query: str) -> str:
-    """Convert a natural-language question into an FTS5 OR-tokenized query.
-    Strips punctuation, drops stopwords, joins remaining tokens with OR."""
-    import re as _re
-    tokens = _re.findall(r"[a-zA-Z][a-zA-Z0-9]+", query.lower())
-    keep = [t for t in tokens if t not in _FTS_STOPWORDS and len(t) > 1]
-    if not keep:
-        return ""
-    return " OR ".join(keep)
+def _sanitize_tokens(query: str) -> list[str]:
+    import re
+    tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9]+", query.lower())
+    return [t for t in tokens if t not in _FTS_STOPWORDS and len(t) > 1]
 
 
 def fts_search(query: str, limit: int = 10) -> list[dict]:
+    """Postgres trigram-based keyword search over goal/brief/skill_md/summary."""
     if not query.strip():
         return []
-    sanitized = _sanitize_fts(query) or query
-    with _conn() as c:
-        try:
-            rows = c.execute(
-                """
-                SELECT id, goal, brief, summary,
-                       snippet(tasks_fts, -1, '<<', '>>', '...', 12) AS snip,
-                       rank
-                FROM tasks_fts WHERE tasks_fts MATCH ?
-                ORDER BY rank LIMIT ?
-                """,
-                (sanitized, limit),
-            ).fetchall()
-            return [dict(r) for r in rows]
-        except sqlite3.OperationalError:
-            like = f"%{query}%"
-            rows = c.execute(
-                """
-                SELECT t.id, t.goal, t.brief, '' AS summary, '' AS snip, 0 AS rank
-                FROM tasks t WHERE t.goal LIKE ? OR t.brief LIKE ? OR t.skill_md LIKE ?
-                ORDER BY t.started_at DESC LIMIT ?
-                """,
-                (like, like, like, limit),
-            ).fetchall()
-            return [dict(r) for r in rows]
+    tokens = _sanitize_tokens(query)
+    if not tokens:
+        return []
+    pattern = "%" + "%".join(tokens) + "%"
+    or_clauses = " OR ".join([f"goal ILIKE %s OR brief ILIKE %s OR skill_md ILIKE %s OR result->>'summary' ILIKE %s"] * 1)
+    params = [pattern, pattern, pattern, pattern]
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"""
+            SELECT id, goal, brief, COALESCE(result->>'summary','') AS summary,
+                   substring(goal from 1 for 200) AS snip,
+                   GREATEST(
+                     similarity(goal, %s),
+                     similarity(COALESCE(brief,''), %s)
+                   ) AS rank
+            FROM tasks
+            WHERE ({or_clauses})
+            ORDER BY rank DESC
+            LIMIT %s
+            """,
+            (query, query, *params, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
 
 def cleanup_old_workspaces(max_age_secs: float) -> list[tuple[str, str]]:
     cutoff = time.time() - max_age_secs
-    with _conn() as c:
-        rows = c.execute(
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
             """
             SELECT id, workspace FROM tasks
             WHERE finished_at IS NOT NULL
-              AND finished_at < ?
-              AND COALESCE(keep_workspace, 0) = 0
+              AND finished_at < %s
+              AND COALESCE(keep_workspace, false) = false
               AND status IN ('done', 'failed', 'abandoned', 'cancelled')
             """,
             (cutoff,),
-        ).fetchall()
-        return [(r["id"], r["workspace"]) for r in rows if r["workspace"]]
+        )
+        return [(r[0], r[1]) for r in cur.fetchall() if r[1]]
 
 
 def mark_keep(task_id: str, keep: bool = True) -> None:
-    with _conn() as c:
-        c.execute("UPDATE tasks SET keep_workspace = ? WHERE id = ?", (int(keep), task_id))
-
-
-def reindex_fts() -> int:
-    """Wipe and rebuild tasks_fts from tasks table. Call after schema change."""
-    with _conn() as c:
-        c.execute("DELETE FROM tasks_fts")
-        rows = c.execute(
-            "SELECT id, goal, brief, skill_md, json_extract(result, '$.summary') AS summary FROM tasks"
-        ).fetchall()
-        for r in rows:
-            c.execute(
-                "INSERT INTO tasks_fts (id, goal, brief, skill_md, summary) VALUES (?,?,?,?,?)",
-                (r["id"], r["goal"] or "", r["brief"] or "", r["skill_md"] or "", r["summary"] or ""),
-            )
-        return len(rows)
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("UPDATE tasks SET keep_workspace = %s WHERE id = %s", (bool(keep), task_id))
 
 
 def all_tasks_with_skill_md() -> list[dict]:
-    """For ChromaDB indexing: return tasks with non-empty skill_md."""
-    with _conn() as c:
-        rows = c.execute(
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
             """
             SELECT id, goal, skill_name, skill_description, skill_md,
-                   COALESCE(json_extract(result, '$.summary'), '') AS summary,
+                   COALESCE(result->>'summary','') AS summary,
                    started_at
-            FROM tasks WHERE skill_md IS NOT NULL AND skill_md != ''
+            FROM tasks WHERE skill_md IS NOT NULL AND skill_md <> ''
             """
-        ).fetchall()
-        return [dict(r) for r in rows]
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_embeddings(task_id: str, summary_embedding: list[float] | None = None, skill_embedding: list[float] | None = None):
+    """V3.5: store pgvector embeddings on task row (computed by rag.py via LangChain)."""
+    with _conn() as c, c.cursor() as cur:
+        if summary_embedding is not None:
+            cur.execute("UPDATE tasks SET summary_embedding = %s::vector WHERE id = %s",
+                        (summary_embedding, task_id))
+        if skill_embedding is not None:
+            cur.execute("UPDATE tasks SET skill_embedding = %s::vector WHERE id = %s",
+                        (skill_embedding, task_id))
+
+
+def vector_search_tasks(query_embedding: list[float], top_k: int = 5) -> list[dict]:
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT id, goal, COALESCE(result->>'summary','') AS summary,
+                   1 - (summary_embedding <=> %s::vector) AS score,
+                   (summary_embedding <=> %s::vector) AS distance
+            FROM tasks
+            WHERE summary_embedding IS NOT NULL
+            ORDER BY summary_embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (query_embedding, query_embedding, query_embedding, top_k),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def vector_search_skills(query_embedding: list[float], top_k: int = 5) -> list[dict]:
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT id, skill_name, skill_description, skill_md,
+                   1 - (skill_embedding <=> %s::vector) AS score,
+                   (skill_embedding <=> %s::vector) AS distance
+            FROM tasks
+            WHERE skill_embedding IS NOT NULL
+            ORDER BY skill_embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (query_embedding, query_embedding, query_embedding, top_k),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def reindex_fts() -> int:
+    """Postgres FTS is in-table (no separate FTS index to rebuild). Returns row count."""
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM tasks;")
+        return cur.fetchone()[0]
+
+
+# ---------- V3.5 B2: structured skill lessons ----------
+
+import hashlib as _hashlib
+
+
+def _normalize_pattern(pattern: str) -> str:
+    """Normalize a lesson pattern so trivial whitespace/case differences don't
+    create duplicate rows. Hash uses lowercased, single-spaced text."""
+    return " ".join(pattern.lower().split())
+
+
+def _pattern_hash(pattern: str) -> str:
+    return _hashlib.sha256(_normalize_pattern(pattern).encode("utf-8")).hexdigest()[:32]
+
+
+def upsert_skill_lesson(
+    pattern: str,
+    origin_task_id: str | None = None,
+    domains: list[str] | None = None,
+    remediation: str | None = None,
+) -> tuple[str, int, bool]:
+    """UPSERT a lesson. On hash collision (duplicate), increments frequency,
+    bumps last_seen, and merges new domains into the existing array.
+
+    Returns (pattern_hash, new_frequency, was_new).
+    """
+    pattern = pattern.strip().lstrip("-").strip()
+    if not pattern:
+        raise ValueError("empty pattern")
+    h = _pattern_hash(pattern)
+    domains = list(domains or [])
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO skill_lessons (pattern_hash, pattern, frequency, domains, remediation, origin_task_id)
+            VALUES (%s, %s, 1, %s::jsonb, %s, %s)
+            ON CONFLICT (pattern_hash) DO UPDATE SET
+                frequency = skill_lessons.frequency + 1,
+                last_seen = now(),
+                domains   = (
+                    SELECT COALESCE(jsonb_agg(DISTINCT d), '[]'::jsonb)
+                    FROM jsonb_array_elements_text(
+                        skill_lessons.domains || EXCLUDED.domains
+                    ) AS d
+                ),
+                remediation = COALESCE(skill_lessons.remediation, EXCLUDED.remediation)
+            RETURNING frequency, (xmax = 0) AS was_new
+            """,
+            (h, pattern, json.dumps(domains), remediation, origin_task_id),
+        )
+        row = cur.fetchone()
+        return h, row[0], bool(row[1])
+
+
+def list_skill_lessons(limit: int = 200, include_archived: bool = False) -> list[dict]:
+    """Return lessons sorted by (frequency DESC, last_seen DESC). Drives the
+    learned-section render in skills/global.md and prompt injection order."""
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        where = "" if include_archived else "WHERE is_archived = false"
+        cur.execute(
+            f"""
+            SELECT pattern_hash, pattern, frequency, domains, remediation,
+                   origin_task_id, first_seen, last_seen, is_archived
+            FROM skill_lessons
+            {where}
+            ORDER BY frequency DESC, last_seen DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def count_skill_lessons() -> int:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM skill_lessons WHERE is_archived = false;")
+        return cur.fetchone()[0]
+
+
+def archive_skill_lesson(pattern_hash: str) -> bool:
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE skill_lessons SET is_archived = true WHERE pattern_hash = %s",
+            (pattern_hash,),
+        )
+        return cur.rowcount > 0
