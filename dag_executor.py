@@ -21,6 +21,7 @@ LangGraph integration gives us:
 - Retry/checkpointing primitives
 - Visual graph (graph.get_graph().draw_mermaid())
 """
+import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Callable, TypedDict
@@ -176,23 +177,66 @@ def _dispatch_ready(state: DagState):
     ]
 
 
-def _build_graph():
+# V3.5 F6: PostgresSaver checkpoints DagState every superstep so a DAG
+# survives server crashes / restarts. To resume, just call graph.ainvoke
+# again with the SAME thread_id — LangGraph auto-resumes from last checkpoint.
+_CHECKPOINTER = None
+_CHECKPOINTER_INIT = False
+
+
+async def _get_async_checkpointer():
+    """Singleton AsyncPostgresSaver. We use the async variant because the DAG
+    is invoked via `graph.ainvoke()` — sync PostgresSaver raises NotImplementedError
+    inside an async invoke. Lazily creates the underlying checkpoint tables
+    on first use via .setup(). Reuses DATABASE_URL via psycopg3 pool."""
+    global _CHECKPOINTER, _CHECKPOINTER_INIT
+    if _CHECKPOINTER_INIT:
+        return _CHECKPOINTER
+    _CHECKPOINTER_INIT = True
+    dsn = os.environ.get("DATABASE_URL", "")
+    if not dsn:
+        return None
+    try:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg_pool import AsyncConnectionPool
+        pool = AsyncConnectionPool(
+            conninfo=dsn,
+            max_size=4,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            open=False,
+        )
+        await pool.open()
+        cp = AsyncPostgresSaver(conn=pool)
+        await cp.setup()
+        _CHECKPOINTER = cp
+        print("[dag] F6: AsyncPostgresSaver checkpoint tables ready")
+    except Exception as e:
+        print(f"[dag] checkpoint setup failed (DAGs will run without resume): {e}")
+        _CHECKPOINTER = None
+    return _CHECKPOINTER
+
+
+def _build_graph(checkpointer=None):
     builder = StateGraph(DagState)
     builder.add_node("dispatcher", _dispatcher_node)
     builder.add_node("step_node", _step_node)
     builder.add_edge(START, "dispatcher")
     builder.add_conditional_edges("dispatcher", _dispatch_ready, ["step_node", END])
     builder.add_edge("step_node", "dispatcher")
+    if checkpointer is not None:
+        return builder.compile(checkpointer=checkpointer)
     return builder.compile()
 
 
 _GRAPH = None
 
 
-def _get_graph():
+async def _get_graph():
+    """Async because the checkpointer init must run in an async context."""
     global _GRAPH
     if _GRAPH is None:
-        _GRAPH = _build_graph()
+        cp = await _get_async_checkpointer()
+        _GRAPH = _build_graph(checkpointer=cp)
     return _GRAPH
 
 
@@ -257,7 +301,7 @@ async def execute_dag(
     if on_step_event is not None:
         _CALLBACKS[exec_id] = on_step_event
 
-    graph = _get_graph()
+    graph = await _get_graph()
     initial: DagState = {
         "steps": steps,
         "workspace": str(task_workspace),
@@ -271,8 +315,16 @@ async def execute_dag(
     max_layers = max(1, len(steps))
     recursion_limit = max(50, 2 * max_layers + 10)
 
+    # V3.5 F6: thread_id ties every superstep checkpoint to this task. If the
+    # task is re-invoked later (after a crash/restart), passing the same
+    # thread_id resumes from the last persisted checkpoint instead of starting
+    # the DAG over from step 1.
+    invoke_config: dict = {
+        "recursion_limit": recursion_limit,
+        "configurable": {"thread_id": exec_id},
+    }
     try:
-        final = await graph.ainvoke(initial, config={"recursion_limit": recursion_limit})
+        final = await graph.ainvoke(initial, config=invoke_config)
         results_by_id = {r["step_id"]: r for r in final.get("results", [])}
         failed = list(final.get("failed_step_ids", []))
         not_run = [s["id"] for s in steps if s["id"] not in results_by_id]
@@ -326,7 +378,9 @@ def _validate_dag(steps: list[dict]) -> None:
 
 
 def get_graph_mermaid() -> str:
+    """Sync helper that builds an UNCOMPILED graph for visualization only.
+    Skips the async checkpointer setup which would require an event loop."""
     try:
-        return _get_graph().get_graph().draw_mermaid()
+        return _build_graph(checkpointer=None).get_graph().draw_mermaid()
     except Exception:
         return ""

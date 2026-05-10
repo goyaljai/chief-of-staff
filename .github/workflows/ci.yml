@@ -69,6 +69,11 @@ jobs:
           COS_ALLOW_DESTRUCTIVE_TESTS: "1"
         run: python eval/test_e5_perf.py
 
+      - name: F6 checkpoint regression (DAG resume from postgres saver)
+        env:
+          COS_ALLOW_DESTRUCTIVE_TESTS: "1"
+        run: python eval/test_f6_checkpoint.py
+
       - name: DAG executor parallel/topology tests
         run: python eval/test_dag_parallel.py
 

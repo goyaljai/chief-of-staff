@@ -16,6 +16,9 @@ langchain-community>=0.3.0
 langchain-postgres>=0.0.13
 langchain-huggingface>=0.1.0
 langgraph>=0.2.50
+langgraph-checkpoint-postgres>=2.0.0  # F6: DAG checkpoint + resume on crash
+psycopg[binary]>=3.2.0                # PostgresSaver dependency (psycopg3)
+psycopg-pool>=3.2.0
 langsmith>=0.1.130
 sentence-transformers>=3.0.0
 
