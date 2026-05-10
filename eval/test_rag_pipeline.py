@@ -27,6 +27,10 @@ import config  # noqa: F401
 # will replace the real one before any HTTP call is made.
 os.environ.setdefault("DATABRICKS_TOKEN", "test-token-not-real")
 os.environ.setdefault("DATABRICKS_BASE_URL", "http://test-base-url.invalid")
+# R5-2 thread-safety test needs to actually reach the init path.
+# Without a key, _get_rerank_client returns None immediately and the
+# mocked voyageai.Client constructor never runs (init_calls['n'] stays 0).
+os.environ.setdefault("VOYAGE_API_KEY", "test-voyage-key-not-real")
 
 
 def main():
