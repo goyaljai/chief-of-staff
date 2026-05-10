@@ -116,7 +116,7 @@ def admin_promote_lesson(req: PromoteLessonRequest, request: Request):
     Gated by ADMIN_TOKEN if env var set.
     """
     _check_admin_token(request)
-    from orchestrator import append_to_global
+    from agents import append_to_global
 
     pattern = (req.pattern or "").strip()
     if not pattern:

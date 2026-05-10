@@ -23,7 +23,7 @@ Public exports:
 import hashlib
 import time
 
-from orchestrator import Orchestrator
+from agents import Orchestrator
 
 
 orchestrator_singleton = Orchestrator()

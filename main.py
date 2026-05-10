@@ -112,7 +112,7 @@ async def startup():
     print(f"[main] hydrated {len(STORE.all())} tasks from DB")
 
     try:
-        from orchestrator import bootstrap_skill_lessons_from_md
+        from agents import bootstrap_skill_lessons_from_md
         bootstrap_skill_lessons_from_md()
     except Exception as e:
         print(f"[main] skill_lessons bootstrap failed: {e}")

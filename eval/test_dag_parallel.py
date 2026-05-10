@@ -271,7 +271,7 @@ async def main():
 
     # Test 10: parse_dag accepts (timeout: N) annotation
     print(f"\nTest 10: parse_dag with timeout annotation")
-    from orchestrator import Orchestrator
+    from agents import Orchestrator
     orch = Orchestrator()
     brief = (
         "## Objective\nx\n\n"

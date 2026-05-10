@@ -33,7 +33,7 @@ def ask_task(task_id: str, req: AskRequest):
     if not state:
         raise HTTPException(status_code=404, detail="task not found")
 
-    from orchestrator import _chat, _extract_json
+    from agents import _chat, _extract_json
 
     artifacts = list_artifacts(state.workspace, max_files=10, max_preview=5000)
     final_text = last_claude_output(state.log)

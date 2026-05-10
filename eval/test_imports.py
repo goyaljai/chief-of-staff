@@ -14,7 +14,7 @@ import config  # noqa: F401  -- loads .env
 
 modules = [
     "persistence", "rag", "claude_runner", "dag_executor",
-    "orchestrator", "supervisor_loop", "main",
+    "agents", "supervisor_loop", "main",
 ]
 
 print("=" * 60)

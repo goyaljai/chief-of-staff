@@ -47,7 +47,7 @@ def _build_conn():
 
 
 def main():
-    import orchestrator
+    from agents import llm as orchestrator  # _chat + _client live here after the agents/ refactor
     print("=" * 60)
     print("CHAT RETRY REGRESSION TEST (F5)")
     print("=" * 60)
