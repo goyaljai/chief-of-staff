@@ -4,6 +4,21 @@ uvicorn>=0.32.0
 pydantic>=2.0.0
 python-telegram-bot>=21.0
 httpx>=0.27.0
-chromadb>=0.5.0
 sse-starlette>=2.1.0
-langsmith>=0.1.0
+
+# V3.5 Phase 1: Postgres + pgvector via Supabase replaces SQLite + Chroma
+psycopg2-binary>=2.9.9
+
+# V3.5 Phase 1 A3 / A4: LangChain RAG + LangGraph DAG executor + LangSmith tracing
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-postgres>=0.0.13
+langchain-huggingface>=0.1.0
+langgraph>=0.2.50
+langsmith>=0.1.130
+sentence-transformers>=3.0.0
+
+# Kept for back-compat; can be removed after the LangChain RAG migration is
+# fully verified in production.
+chromadb>=0.5.0
