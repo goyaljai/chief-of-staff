@@ -17,16 +17,17 @@ import config  # noqa: F401
 
 
 async def main():
-    import main as srv
+    import main as srv  # noqa: F401 — kept for STORE access via srv.STORE
     import dag_executor
+    import services.shutdown as shutdown_mod
     from task_store import TaskState
 
     print("=" * 60)
     print("F1 GRACEFUL SHUTDOWN TEST")
     print("=" * 60)
 
-    # Reset
-    srv._SHUTTING_DOWN = False
+    # Reset (the flag now lives in services.shutdown after the v2.0 refactor)
+    shutdown_mod._SHUTTING_DOWN = False
     srv.STORE._tasks.clear()
 
     # 1. Seed a few in-flight tasks
@@ -48,9 +49,9 @@ async def main():
 
     try:
         # 2. Trigger drain
-        await srv._drain_inflight()
-        assert srv._SHUTTING_DOWN is False, \
-            "_drain_inflight should not toggle the flag itself; that's the signal handler's job"
+        await shutdown_mod.drain_inflight()
+        assert shutdown_mod._SHUTTING_DOWN is False, \
+            "drain_inflight should not toggle the flag itself; that's the signal handler's job"
     finally:
         dag_executor.interrupt_all_for = orig
 
@@ -66,8 +67,9 @@ async def main():
     print(f"  ✓ dag_executor.interrupt_all_for called for: {sorted(interrupted_calls)}")
 
     # 5. Signal-handler flag flip + /task/run rejection
-    srv._SHUTTING_DOWN = True
-    from main import run as run_endpoint, TaskRunRequest
+    shutdown_mod._SHUTTING_DOWN = True
+    from routes.task_run import run as run_endpoint
+    from routes.schemas import TaskRunRequest
     from fastapi import HTTPException
     raised = False
     try:
@@ -78,7 +80,7 @@ async def main():
     print("  ✓ /task/run returns 503 when _SHUTTING_DOWN")
 
     # Reset
-    srv._SHUTTING_DOWN = False
+    shutdown_mod._SHUTTING_DOWN = False
     srv.STORE._tasks.clear()
 
     print()

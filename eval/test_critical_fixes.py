@@ -48,7 +48,7 @@ def main():
     print("  ✓ D6: 20 concurrent dry_run uuids produce 20 distinct workspace paths")
 
     # 3. D7 admin-token enforcement
-    from main import _check_admin_token
+    from routes.admin import _check_admin_token
     from fastapi import HTTPException
     from unittest.mock import MagicMock
 
@@ -86,7 +86,7 @@ def main():
     os.environ.pop("ADMIN_TOKEN", None)
 
     # 4. D7 pattern length cap (sanity — full HTTP path tested in smoke)
-    from main import _MAX_PATTERN_LEN, _MAX_REMEDIATION_LEN
+    from routes.admin import _MAX_PATTERN_LEN, _MAX_REMEDIATION_LEN
     assert _MAX_PATTERN_LEN == 1000
     assert _MAX_REMEDIATION_LEN == 2000
     print(f"  ✓ D7: pattern cap {_MAX_PATTERN_LEN}, remediation cap {_MAX_REMEDIATION_LEN}")

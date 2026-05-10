@@ -58,7 +58,7 @@ def main():
     print(f"  ✓ Hook recorded 3 snapshot entries (1 overwrite, 2 creates)")
 
     # 3. Simulate the /undo endpoint logic inline
-    from main import undo_task as _undo_handler
+    from routes.undo import undo_task as _undo_handler
     from task_store import STORE, TaskState
 
     tid = f"d1_test_{uuid.uuid4().hex[:6]}"
