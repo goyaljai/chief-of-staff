@@ -18,7 +18,7 @@ services:
   bot:
     build: .
     container_name: cos-bot
-    command: ["python3", "telegram_bot.py"]
+    command: ["python3", "-m", "integrations.telegram.bot"]
     env_file: .env
     environment:
       - SUPERVISOR_API_BASE_URL=http://server:8000
