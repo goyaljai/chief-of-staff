@@ -26,9 +26,29 @@ GLOBAL_BACKUP = GLOBAL_SKILL_PATH.read_text() if GLOBAL_SKILL_PATH.exists() else
 
 
 def _truncate_lessons():
-    import psycopg2
+    """V3.5 round-2 fix #8: refuse to TRUNCATE on a non-test DB.
+    Without this guard, running `python eval/test_skill_lessons.py` with the
+    project's DATABASE_URL pointed at production would wipe all curated
+    skill_lessons rows. We allow the truncate only when:
+      - DATABASE_URL host contains 'localhost' (CI service container), OR
+      - env var COS_ALLOW_DESTRUCTIVE_TESTS=1 is set explicitly, OR
+      - DATABASE_URL database name contains 'test'."""
     import os
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    import psycopg2
+    dsn = os.environ["DATABASE_URL"]
+    permitted = (
+        "localhost" in dsn
+        or os.environ.get("COS_ALLOW_DESTRUCTIVE_TESTS") == "1"
+        or "/test" in dsn
+        or "_test" in dsn
+    )
+    if not permitted:
+        raise RuntimeError(
+            "Refusing to TRUNCATE skill_lessons on a non-test DATABASE_URL.\n"
+            "  Set COS_ALLOW_DESTRUCTIVE_TESTS=1 to override (you'll lose curated lessons),\n"
+            "  or point DATABASE_URL at a localhost/test database for this run."
+        )
+    conn = psycopg2.connect(dsn)
     cur = conn.cursor()
     cur.execute("TRUNCATE TABLE skill_lessons")
     conn.commit()

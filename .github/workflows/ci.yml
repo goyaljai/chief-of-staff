@@ -61,6 +61,9 @@ jobs:
       - name: chat retry regression (Databricks 429 / 5xx / conn error)
         run: python eval/test_chat_retry.py
 
+      - name: critical fixes regression (D5 case, D6 unique ws, D7 auth, length caps)
+        run: python eval/test_critical_fixes.py
+
       - name: DAG executor parallel/topology tests
         run: python eval/test_dag_parallel.py
 

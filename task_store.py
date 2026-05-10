@@ -181,7 +181,14 @@ class TaskStore:
         s = self._tasks.get(tid)
         if not s or s.status != "escalated":
             return False
-        s.escalation_answer = answer.lower().strip()
+        # V3.5 D5 fix: only lowercase the legacy 1-char a/b answers; preserve
+        # case for free-text directives (URLs, file paths, identifiers etc.
+        # were getting mangled — "Use HTTPS" → "use https").
+        stripped = (answer or "").strip()
+        if len(stripped) <= 2:
+            s.escalation_answer = stripped.lower()
+        else:
+            s.escalation_answer = stripped
         s.escalation_event.set()
         return True
 

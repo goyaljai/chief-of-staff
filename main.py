@@ -169,6 +169,21 @@ def _run_workspace_sweep_once() -> int:
                 swept += 1
             except Exception as e:
                 print(f"[sweeper] failed to remove {ws}: {e}")
+    # V3.5 round-2 fix #5: dry_run dirs aren't in the DB so cleanup_old_workspaces
+    # never touches them. Sweep them by mtime here — anything under
+    # WORKSPACE_ROOT/_dry_run older than 1 day is fair game.
+    import time as _time
+    dry_root = WORKSPACE_ROOT / "_dry_run"
+    if dry_root.exists():
+        cutoff = _time.time() - 86400  # 1 day TTL for dry-run scratch
+        for p in dry_root.iterdir():
+            try:
+                if p.stat().st_mtime < cutoff:
+                    shutil.rmtree(p, ignore_errors=True)
+                    swept += 1
+                    print(f"[sweeper] removed stale dry_run dir {p}")
+            except Exception as e:
+                print(f"[sweeper] failed to remove {p}: {e}")
     if swept:
         print(f"[sweeper] swept {swept} stale workspaces (TTL={WORKSPACE_TTL_DAYS}d)")
     return swept
@@ -219,11 +234,14 @@ async def run(req: TaskRunRequest, dry_run: bool = False):
     if dry_run:
         from task_store import TaskState as _TS
         import uuid as _uuid
+        # V3.5 D6 fix: per-call unique workspace path — concurrent dry runs
+        # otherwise share `_dry_run/` and race in save_task_skill writes.
+        dry_id = f"dry_{_uuid.uuid4().hex[:8]}"
         transient = _TS(
-            id=f"dry_{_uuid.uuid4().hex[:8]}",
+            id=dry_id,
             goal=req.task,
             clarifications=req.clarifications,
-            workspace=str(WORKSPACE_ROOT / "_dry_run"),
+            workspace=str(WORKSPACE_ROOT / "_dry_run" / dry_id),
         )
         try:
             skill_md = orchestrator_singleton.generate_skill_brief(
@@ -369,6 +387,9 @@ def answer_escalation(task_id: str, body: EscalationAnswer):
     return {"ok": ok, "answer": answer, "mode": "binary" if answer.lower() in ("a", "b") else "free_text"}
 
 
+_MAX_NOTE_LEN = 4000
+
+
 @app.post("/task/{task_id}/note")
 def add_note(task_id: str, body: NoteRequest):
     state = STORE.get(task_id)
@@ -379,6 +400,12 @@ def add_note(task_id: str, body: NoteRequest):
     note = body.note.strip()
     if not note:
         raise HTTPException(status_code=400, detail="note empty")
+    # V3.5 round-2 fix #7: cap note length to keep prompt budget + memory bounded.
+    if len(note) > _MAX_NOTE_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"note too long ({len(note)} chars; max {_MAX_NOTE_LEN})",
+        )
     state.user_notes.append(note)
     STORE.append_log(task_id, {"kind": "user_note", "note": note})
     return {"ok": True, "queued_for_next_loop": True, "notes_pending": len(state.user_notes)}
@@ -436,10 +463,18 @@ async def stream_task(task_id: str, request: Request):
 
 
 @app.post("/admin/reindex")
-def reindex():
+def reindex(request: Request):
+    """V3.5 round-2 fix #6: gate behind ADMIN_TOKEN if env var set.
+    Reindex is expensive (re-embeds every task into PGVector) and shouldn't
+    be open to network."""
+    _check_admin_token(request)
     fts = db.reindex_fts()
     chroma = rag.reindex_all_from_db()
     return {"fts_rows": fts, "chroma": chroma}
+
+
+_MAX_PATTERN_LEN = 1000
+_MAX_REMEDIATION_LEN = 2000
 
 
 class PromoteLessonRequest(BaseModel):
@@ -449,21 +484,45 @@ class PromoteLessonRequest(BaseModel):
     origin_task_id: str | None = None
 
 
+def _check_admin_token(request: Request) -> None:
+    """V3.5 D7 fix: require ADMIN_TOKEN header for /admin/* routes if the env
+    var is set. Self-hosted single-user setups can leave it unset; production
+    or shared hosts MUST set it. Closes the no-auth concern on /admin/promote."""
+    expected = os.environ.get("ADMIN_TOKEN", "").strip()
+    if not expected:
+        return
+    got = request.headers.get("x-admin-token", "").strip()
+    if got != expected:
+        raise HTTPException(status_code=401, detail="invalid or missing X-Admin-Token")
+
+
 @app.post("/admin/promote")
-def admin_promote_lesson(req: PromoteLessonRequest):
+def admin_promote_lesson(req: PromoteLessonRequest, request: Request):
     """V3.5 D7: seed/curate skill_lessons directly without running a task.
 
     UPSERTs the lesson (frequency increments on duplicates) and re-renders
     skills/global.md. Closes gap L10."""
+    _check_admin_token(request)
     from orchestrator import append_to_global
     pattern = (req.pattern or "").strip()
     if not pattern:
         raise HTTPException(status_code=400, detail="pattern is required")
-    entry = {"pattern": pattern}
-    if req.remediation:
-        entry["remediation"] = req.remediation
+    if len(pattern) > _MAX_PATTERN_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"pattern too long ({len(pattern)} chars; max {_MAX_PATTERN_LEN})",
+        )
+    remediation = (req.remediation or "").strip() or None
+    if remediation and len(remediation) > _MAX_REMEDIATION_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"remediation too long ({len(remediation)} chars; max {_MAX_REMEDIATION_LEN})",
+        )
+    entry: dict = {"pattern": pattern}
+    if remediation:
+        entry["remediation"] = remediation
     if req.domains:
-        entry["domains"] = req.domains
+        entry["domains"] = [d for d in req.domains if isinstance(d, str) and d.strip()][:8]
     added = append_to_global([entry], origin_task_id=req.origin_task_id or "admin")
     total = db.count_skill_lessons()
     return {"ok": True, "added_new": added, "total_lessons": total}
