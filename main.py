@@ -661,12 +661,18 @@ class PromoteLessonRequest(BaseModel):
 def _check_admin_token(request: Request) -> None:
     """V3.5 D7 fix: require ADMIN_TOKEN header for /admin/* routes if the env
     var is set. Self-hosted single-user setups can leave it unset; production
-    or shared hosts MUST set it. Closes the no-auth concern on /admin/promote."""
+    or shared hosts MUST set it. Closes the no-auth concern on /admin/promote.
+
+    R7-2 fix: use hmac.compare_digest for constant-time comparison so the
+    endpoint isn't vulnerable to timing attacks (`==` short-circuits on
+    first mismatched byte, leaking byte position via response time).
+    """
     expected = os.environ.get("ADMIN_TOKEN", "").strip()
     if not expected:
         return
-    got = request.headers.get("x-admin-token", "").strip()
-    if got != expected:
+    got = (request.headers.get("x-admin-token", "") or "").strip()
+    import hmac as _hmac
+    if not _hmac.compare_digest(got, expected):
         raise HTTPException(status_code=401, detail="invalid or missing X-Admin-Token")
 
 

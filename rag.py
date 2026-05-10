@@ -138,11 +138,16 @@ class DatabricksEmbeddings:
                 "DatabricksEmbeddings: DATABRICKS_TOKEN and DATABRICKS_BASE_URL "
                 "must both be set. Add them to .env (see config.py)."
             )
+        # R7-1 fix: max_retries=0 disables the OpenAI SDK's own retry loop.
+        # Our outer _create_with_retry already retries 4 times with backoff;
+        # nested retry layers compound — a sustained 429 used to attempt
+        # up to 15 times (3 SDK × ~5 outer-attempt-aware paths). Now: ours
+        # is the only retry layer. Cleaner, predictable, faster failure.
         self._client = OpenAI(
             api_key=token,
             base_url=base_url,
             timeout=60.0,
-            max_retries=3,
+            max_retries=0,
         )
         self._model = model
         self._batch_size = 96  # Databricks gateway accepts batches; 96 is safe
