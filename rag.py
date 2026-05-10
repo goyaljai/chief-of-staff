@@ -128,9 +128,19 @@ class DatabricksEmbeddings:
         # being installed (it always is in our env, but principle-of-least-
         # surprise wins).
         from openai import OpenAI
+        # R6-2 fix: actionable error if creds are missing. Default os.environ[]
+        # raises a bare KeyError that crashes deep inside add_texts with no
+        # hint about how to fix it.
+        token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+        base_url = os.environ.get("DATABRICKS_BASE_URL", "").strip()
+        if not token or not base_url:
+            raise RuntimeError(
+                "DatabricksEmbeddings: DATABRICKS_TOKEN and DATABRICKS_BASE_URL "
+                "must both be set. Add them to .env (see config.py)."
+            )
         self._client = OpenAI(
-            api_key=os.environ["DATABRICKS_TOKEN"],
-            base_url=os.environ["DATABRICKS_BASE_URL"],
+            api_key=token,
+            base_url=base_url,
             timeout=60.0,
             max_retries=3,
         )
@@ -140,27 +150,20 @@ class DatabricksEmbeddings:
     def _create_with_retry(self, inputs: list[str]):
         """R5-1: jittered exponential backoff on transient failures.
         Mirrors orchestrator._chat's pattern. 4 attempts total: 1s, 2s, 4s, 8s
-        base waits + 0-1s jitter.
-
-        Also guards against empty inputs which Databricks returns 400 for —
-        we strip empties and raise our own clearer error if everything's empty."""
+        base waits + 0-1s jitter."""
         from openai import (
             APIConnectionError, APITimeoutError,
             InternalServerError, RateLimitError,
         )
         import random as _random
         import time as _time
-        # Defensive: empty strings cause 400 from the gateway.
-        clean = [t for t in inputs if (t or "").strip()]
-        if not clean:
-            raise ValueError("DatabricksEmbeddings: all input texts were empty")
         transient_excs = (
             RateLimitError, APIConnectionError, APITimeoutError, InternalServerError,
         )
         last_exc: Exception | None = None
         for attempt in range(4):
             try:
-                return self._client.embeddings.create(model=self._model, input=clean)
+                return self._client.embeddings.create(model=self._model, input=inputs)
             except transient_excs as e:
                 last_exc = e
                 if attempt == 3:
@@ -174,17 +177,43 @@ class DatabricksEmbeddings:
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query. Used by retrieval calls (search_tasks,
         find_matching_skill)."""
-        resp = self._create_with_retry([text])
+        # Single placeholder for a fully-empty query so callers don't crash;
+        # the resulting vector will be the embedding of " " which is fine
+        # for the rare empty-query edge case (returns no useful matches).
+        resp = self._create_with_retry([text or " "])
         return resp.data[0].embedding
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of documents. Used by index calls. Splits into
-        chunks of `_batch_size` to respect gateway limits."""
+        chunks of `_batch_size` to respect gateway limits.
+
+        R6-1 fix (CRITICAL — silent data corruption):
+            Previously we filtered empty strings BEFORE sending to the API.
+            That broke the input-ordering contract: callers passing
+            `[s1, '', s2]` got back 2 vectors for 3 metadata entries, and
+            PGVector.add_texts wrote vectors against the WRONG metadatas.
+            Now we substitute empties with a single space placeholder so
+            the API still accepts the call AND the output count matches
+            the input count exactly. Caller's metadatas/ids align correctly.
+        """
+        if not texts:
+            return []
+        # R6-1: substitute empties with " " (cheap to embed, rare in practice).
+        # The output index === input index always.
+        clean_texts = [t if (t and t.strip()) else " " for t in texts]
         out: list[list[float]] = []
-        for i in range(0, len(texts), self._batch_size):
-            chunk = texts[i:i + self._batch_size]
+        for i in range(0, len(clean_texts), self._batch_size):
+            chunk = clean_texts[i:i + self._batch_size]
             resp = self._create_with_retry(chunk)
-            out.extend(d.embedding for d in resp.data)
+            chunk_out = [d.embedding for d in resp.data]
+            if len(chunk_out) != len(chunk):
+                # Defensive: should never happen now, but if it does we
+                # fail loudly rather than silently misalign downstream.
+                raise RuntimeError(
+                    f"DatabricksEmbeddings: API returned {len(chunk_out)} vectors "
+                    f"for {len(chunk)} inputs — would corrupt caller's mapping"
+                )
+            out.extend(chunk_out)
         return out
 
 
@@ -357,34 +386,60 @@ def is_ready() -> bool:
 def index_task(task_id: str, goal: str, summary: str, skill_md: str = "") -> None:
     """Index a completed task in the task_summaries store.
 
-    Stores BOTH:
-      - The full text in PGVector's collection (for hybrid metadata retrieval)
-      - The dense embedding in tasks.summary_embedding (for fast pgvector
-        ANN search via our ivfflat index)
+    Stores in BOTH places (dual-write, ordered):
+      1. tasks.summary_embedding (denormalized column, drives the hot-path
+         vector_search_tasks query through our ivfflat index)
+      2. langchain_pg_embedding via PGVector.add_texts (richer metadata
+         retrieval through search_tasks)
 
-    NAMESPACING: we prefix the row id with `task::` because langchain_postgres
-    uses a single `langchain_pg_embedding` table for ALL collections; if
-    index_task and index_skill share the raw task_id, the second write
-    overwrites the first across collections. Tests caught this — the search
-    result for a task_summaries query was returning skill_descriptions text.
+    R6-4 fix (silent retrieval skew):
+        Previously we wrote (2) first and (1) second with no atomicity. If
+        (2) succeeded but (1) failed, search_tasks would find the doc but
+        vector_search_tasks would miss it — different query paths returned
+        different result sets.
 
-    Idempotent: re-indexing the same task_id overwrites the prior task entry
-    (but not the skill entry, thanks to the namespace prefix)."""
+        Now we embed FIRST, then write (1) and (2) in order. If (2) fails,
+        we attempt to roll back (1) by clearing the denormalized column,
+        leaving the system in a clean "not indexed" state rather than a
+        half-indexed one.
+
+    NAMESPACING: row id prefixed with `task::` because langchain_postgres
+    uses a single langchain_pg_embedding table for ALL collections; sharing
+    raw task_id between index_task and index_skill caused cross-collection
+    overwrites (tests caught it).
+    """
     if not goal:
         return
     try:
         text = f"GOAL: {goal}\n\nSUMMARY: {summary}\n\nSKILL: {skill_md[:1500]}"
-        store = _get_task_store()
-        store.add_texts(
-            texts=[text],
-            metadatas=[{"task_id": task_id, "goal": goal[:500]}],
-            ids=[f"task::{task_id}"],
-        )
-        # Also write to our denormalized column so the hot-path search
-        # avoids the langchain_postgres collection table and uses the
-        # ivfflat index directly.
+        # Embed once — used for both writes
         emb = _get_embed().embed_query(text)
+        # Write 1: denormalized column (cheap, single UPDATE)
         db.update_embeddings(task_id, summary_embedding=emb)
+        # Write 2: langchain_postgres collection
+        try:
+            store = _get_task_store()
+            store.add_texts(
+                texts=[text],
+                metadatas=[{"task_id": task_id, "goal": goal[:500]}],
+                ids=[f"task::{task_id}"],
+            )
+        except Exception as e_inner:
+            # Roll back write 1 so we don't have a half-indexed task.
+            # db.update_embeddings(...None) is a no-op (skips None), so we
+            # issue the UPDATE directly via raw SQL.
+            try:
+                import psycopg2
+                import os as _os
+                with psycopg2.connect(_os.environ["DATABASE_URL"]) as _c:
+                    with _c.cursor() as _cur:
+                        _cur.execute(
+                            "UPDATE tasks SET summary_embedding = NULL WHERE id = %s",
+                            (task_id,),
+                        )
+            except Exception:
+                pass
+            raise
         print(f"[rag] indexed task {task_id}")
     except Exception as e:
         import traceback
@@ -395,23 +450,42 @@ def index_task(task_id: str, goal: str, summary: str, skill_md: str = "") -> Non
 def index_skill(task_id: str, name: str, description: str, skill_md: str) -> None:
     """Index a skill description for future find_matching_skill lookups.
 
+    R6-4 fix: same atomic dual-write pattern as index_task — embed once,
+    write denormalized column first, write PGVector collection second,
+    roll back column on collection-write failure.
+
     Namespaced with `skill::` prefix — see the index_task docstring for why."""
     if not description:
         return
     try:
-        store = _get_skill_store()
-        store.add_texts(
-            texts=[description],
-            metadatas=[{
-                "task_id": task_id,
-                "name": name or "",
-                "description": description[:500],
-                "skill_md_preview": skill_md[:500],
-            }],
-            ids=[f"skill::{task_id}"],
-        )
         emb = _get_embed().embed_query(description)
         db.update_embeddings(task_id, skill_embedding=emb)
+        try:
+            store = _get_skill_store()
+            store.add_texts(
+                texts=[description],
+                metadatas=[{
+                    "task_id": task_id,
+                    "name": name or "",
+                    "description": description[:500],
+                    "skill_md_preview": skill_md[:500],
+                }],
+                ids=[f"skill::{task_id}"],
+            )
+        except Exception:
+            # Roll back the column update so we don't leave a half-indexed skill
+            try:
+                import psycopg2
+                import os as _os
+                with psycopg2.connect(_os.environ["DATABASE_URL"]) as _c:
+                    with _c.cursor() as _cur:
+                        _cur.execute(
+                            "UPDATE tasks SET skill_embedding = NULL WHERE id = %s",
+                            (task_id,),
+                        )
+            except Exception:
+                pass
+            raise
         print(f"[rag] indexed skill {task_id}")
     except Exception as e:
         import traceback
@@ -452,6 +526,7 @@ def find_matching_skill(
     description_or_task: str,
     top_k: int = 1,
     distance_max: float = 0.40,
+    rerank_min: float = 0.30,
 ) -> dict | None:
     """Decide whether we already have a battle-tested skill brief for this
     kind of task. If yes, the supervisor reuses it instead of paying the
@@ -461,10 +536,17 @@ def find_matching_skill(
         description_or_task: Free-text describing the new task.
         top_k: Number of candidates to consider AFTER rerank.
         distance_max: Cosine distance threshold (lower = more similar).
-            Returns None if even the best match is farther than this.
+            First-stage filter; anything farther is guaranteed irrelevant.
+        rerank_min: Minimum rerank_score to accept (R6-3 fix). The reranker
+            scores ~0-1 with higher = more relevant. A candidate that
+            squeaked past the cosine filter at distance 0.39 might rerank
+            at 0.05 — clearly irrelevant — and the prior code returned it
+            anyway. Now we require rerank_score >= rerank_min. Set to 0.0
+            to disable the second-stage filter. Reranker-skipped candidates
+            (rerank_score=None) bypass this check (we have no signal to gate on).
 
     Returns:
-        The best-matching skill, or None if no match crosses the threshold.
+        The best-matching skill, or None if no match crosses both thresholds.
     """
     if not description_or_task.strip():
         return None
@@ -485,14 +567,24 @@ def find_matching_skill(
             }
             for doc, distance in results
         ]
-        # Filter by cosine distance BEFORE rerank — anything farther than
-        # `distance_max` is guaranteed irrelevant; no point paying the
-        # reranker to re-score it.
+        # Stage 1: cosine distance filter (cheap)
         candidates = [c for c in candidates if c["distance"] <= distance_max]
         if not candidates:
             return None
+        # Stage 2: rerank
         ranked = _rerank(description_or_task, candidates, top_k=top_k)
-        return ranked[0] if ranked else None
+        if not ranked:
+            return None
+        # Stage 3 (R6-3): rerank_score floor. None = rerank skipped (no
+        # second-stage signal available), so we accept the candidate based
+        # on cosine alone. A real low score means the reranker actively
+        # judged it irrelevant.
+        best = ranked[0]
+        rscore = best.get("rerank_score")
+        if rscore is not None and rscore < rerank_min:
+            print(f"[rag] find_matching_skill: best rerank={rscore:.3f} < threshold {rerank_min} — skipping")
+            return None
+        return best
     except Exception as e:
         print(f"[rag] find_matching_skill failed: {e}")
         return None

@@ -1,0 +1,211 @@
+{
+  "summary": {
+    "total": 40,
+    "pass": 0,
+    "fail": 0,
+    "error": 40,
+    "pass_rate": 0.0
+  },
+  "results": [
+    {
+      "id": "build-py-cli-calc",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "research-mango-list",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "build-android-helloworld",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "research-postgres-vs-sqlite",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "writing-product-spec",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "research-best-typed-langs",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "writing-launch-blog",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "writing-incident-postmortem",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "data-csv-to-md",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "data-extract-emails",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "ops-cron-template",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "ops-systemd-unit",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-fix-typo",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-fizzbuzz",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-anagram-checker",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-shell-script-summary",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "research-rate-limit-strategies",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-rest-api-flask",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "ops-multi-step-deploy-dag",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "data-elt-pipeline-dag",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-cli-todo",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-decorator-memoize",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "research-vector-db-comparison",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "research-llm-pricing-2026",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "data-json-schema-validate",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "data-dedup-csv",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "ops-docker-compose-stack",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "ops-nginx-reverse-proxy",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "writing-press-release-fintech",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "writing-design-doc-ratelimiter",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "writing-bug-postmortem-memleak",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "code-fastapi-crud-sqlite",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-code-async-rate-limiter",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-code-graph-dijkstra",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-code-streaming-csv-aggregator",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-code-distributed-lock-postgres",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-research-postgres-vs-mongo-1m",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-writing-adr-message-queue",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-ops-systemd-graceful-shutdown",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    },
+    {
+      "id": "hard-code-circular-buffer-concurrent",
+      "outcome": "ERROR",
+      "error": "Server error '503 Service Unavailable' for url 'http://localhost:8000/task/run'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503"
+    }
+  ]
+}

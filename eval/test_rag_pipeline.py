@@ -11,6 +11,7 @@ the 4 round-5 fixes:
 These tests don't talk to real Databricks/Voyage — they mock the clients so
 the suite is fast, deterministic, and safe in CI without secrets.
 """
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -63,14 +64,9 @@ def main():
     finally:
         _t.sleep = orig_sleep
 
-    # Empty input → ValueError, no API call
-    fake_client.embeddings.create.reset_mock()
-    try:
-        emb.embed_documents(["", "   ", ""])
-        raise AssertionError("expected ValueError for all-empty input")
-    except ValueError:
-        assert fake_client.embeddings.create.call_count == 0
-        print("  ✓ R5-1: all-empty input → ValueError, no API call")
+    # NOTE: prior R5-1 case `all-empty → ValueError` was removed — R6-1
+    # supersedes it. Empty inputs are now substituted with ' ' placeholders
+    # to preserve input/output ordering. See the R6-1 case below.
 
     # ── R5-2: _get_rerank_client thread-safe (concurrent callers) ─────────
     rag._RERANK_CLIENT = None
@@ -165,6 +161,114 @@ def main():
     assert len(args[0]) == 25, f"batch should contain 25 texts; got {len(args[0])}"
     assert result["tasks_indexed"] == 25
     print(f"  ✓ R5-4: reindex of 25 tasks = 1 batched embed call (was 25 sequential before)")
+
+    # ── R6-1: empty inputs preserve ordering (no batch misalignment) ──────
+    rag._EMBED = None
+    fake_resp = MagicMock()
+    fake_resp.data = [
+        MagicMock(embedding=[0.1] * 1024),
+        MagicMock(embedding=[0.2] * 1024),
+        MagicMock(embedding=[0.3] * 1024),
+    ]
+    fake_client = MagicMock()
+    fake_client.embeddings.create.return_value = fake_resp
+    emb = rag.DatabricksEmbeddings()
+    emb._client = fake_client
+    # Caller passes 3 strings, one empty
+    out = emb.embed_documents(["real text 1", "", "real text 2"])
+    assert len(out) == 3, f"R6-1: must return 3 vectors for 3 inputs (one empty); got {len(out)}"
+    # Inspect the API call — should have substituted ' ' for the empty
+    args, _ = fake_client.embeddings.create.call_args
+    sent = fake_client.embeddings.create.call_args.kwargs.get("input") or args[0] if args else None
+    if sent is None:
+        sent = fake_client.embeddings.create.call_args.kwargs["input"]
+    assert len(sent) == 3, "API call should still receive 3 inputs (empty replaced with placeholder)"
+    print(f"  ✓ R6-1: 3 inputs (1 empty) → 3 vectors, ordering preserved (no metadata misalignment)")
+
+    # Output count mismatch raises loudly (not silently corrupts)
+    fake_resp_short = MagicMock()
+    fake_resp_short.data = [MagicMock(embedding=[0.0] * 1024)]  # 1 vec for 2 inputs
+    fake_client.embeddings.create.return_value = fake_resp_short
+    try:
+        emb.embed_documents(["a", "b"])
+        raise AssertionError("expected RuntimeError on output count mismatch")
+    except RuntimeError as e:
+        assert "would corrupt" in str(e)
+        print("  ✓ R6-1: API count mismatch raises RuntimeError (no silent corruption)")
+
+    # ── R6-2: missing creds → clear RuntimeError, not KeyError ────────────
+    saved = (os.environ.get("DATABRICKS_TOKEN"), os.environ.get("DATABRICKS_BASE_URL"))
+    try:
+        os.environ.pop("DATABRICKS_TOKEN", None)
+        os.environ.pop("DATABRICKS_BASE_URL", None)
+        try:
+            rag.DatabricksEmbeddings()
+            raise AssertionError("expected RuntimeError for missing creds")
+        except RuntimeError as e:
+            assert "DATABRICKS_TOKEN" in str(e) and ".env" in str(e)
+            print("  ✓ R6-2: missing DATABRICKS_TOKEN → clear actionable RuntimeError")
+        except KeyError:
+            raise AssertionError("regressed to bare KeyError")
+    finally:
+        if saved[0]: os.environ["DATABRICKS_TOKEN"] = saved[0]
+        if saved[1]: os.environ["DATABRICKS_BASE_URL"] = saved[1]
+
+    # ── R6-3: rerank_min threshold blocks low-relevance matches ──────────
+    fake_voyage = MagicMock()
+    fake_voyage_result = MagicMock()
+    fake_voyage_result.results = [MagicMock(index=0, relevance_score=0.05)]  # very low!
+    fake_voyage.rerank.return_value = fake_voyage_result
+    rag._RERANK_CLIENT = fake_voyage
+    rag._RERANK_INIT_TRIED = True
+
+    fake_pgv_result = [
+        (MagicMock(page_content="weakly related doc", metadata={"task_id": "t99"}), 0.30),
+    ]
+    fake_skill_store = MagicMock()
+    fake_skill_store.similarity_search_with_score.return_value = fake_pgv_result
+    with patch.object(rag, "_get_skill_store", return_value=fake_skill_store):
+        # rerank_min=0.30 → 0.05 should be rejected
+        m = rag.find_matching_skill("query", top_k=1, distance_max=0.40, rerank_min=0.30)
+        assert m is None, f"R6-3: rerank=0.05 below threshold 0.30 must reject, got {m}"
+        print("  ✓ R6-3: rerank_min threshold rejects low-relevance candidates")
+
+        # rerank_min=0.0 (disabled) → should accept
+        m = rag.find_matching_skill("query", top_k=1, distance_max=0.40, rerank_min=0.0)
+        assert m is not None
+        print("  ✓ R6-3: rerank_min=0.0 disables the second-stage filter (back-compat)")
+
+    # ── R6-4: index_task atomic dual-write — rollback on partial failure ──
+    rollback_calls = []
+
+    def _fake_psycopg2_connect(*args, **kwargs):
+        class _Conn:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def cursor(self):
+                class _Cur:
+                    def __enter__(self): return self
+                    def __exit__(self, *a): pass
+                    def execute(self, sql, params):
+                        rollback_calls.append((sql, params))
+                return _Cur()
+        return _Conn()
+
+    fake_emb = MagicMock()
+    fake_emb.embed_query.return_value = [0.1] * 1024
+    fake_store = MagicMock()
+    fake_store.add_texts.side_effect = Exception("simulated PGVector failure")
+    update_called = []
+    with patch.object(rag, "_get_embed", return_value=fake_emb), \
+         patch.object(rag, "_get_task_store", return_value=fake_store), \
+         patch("db.update_embeddings", side_effect=lambda *a, **kw: update_called.append((a, kw))), \
+         patch("psycopg2.connect", side_effect=_fake_psycopg2_connect):
+        rag.index_task("t_partial", "goal", "summary")
+
+    assert len(update_called) == 1, "denormalized column write must run"
+    rollback_sqls = [c[0] for c in rollback_calls]
+    assert any("summary_embedding = NULL" in s for s in rollback_sqls), \
+        "R6-4: rollback must clear summary_embedding when PGVector write fails"
+    print("  ✓ R6-4: index_task partial failure → rolled back denormalized column to NULL")
 
     print()
     print("=" * 60)
