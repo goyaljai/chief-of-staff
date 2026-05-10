@@ -1,6 +1,7 @@
 {
-  "version": 2,
-  "description": "V3.5 expanded eval suite. 16 fast + 4 slow. Fast tasks form the CI subset; the full suite runs on demand.",
+  "version": 3,
+  "description": "v2.0 Phase 1 (C1.5) — 40-task eval suite. 28 fast + 12 hard. Hard tasks are where DSPy (Phase 3) gets a real gradient to optimize against; if all 40 pass on a stock orchestrator prompt, DSPy has no signal. We deliberately bias the hard tasks toward situations the supervisor commonly mishandles (concurrency edge cases, distributed semantics, multi-file consistency, opinionated writing).",
+
   "fast_ids": [
     "build-py-cli-calc",
     "research-mango-list",
@@ -17,14 +18,37 @@
     "code-fizzbuzz",
     "code-anagram-checker",
     "code-shell-script-summary",
-    "research-rate-limit-strategies"
+    "research-rate-limit-strategies",
+    "code-cli-todo",
+    "code-decorator-memoize",
+    "research-vector-db-comparison",
+    "research-llm-pricing-2026",
+    "data-json-schema-validate",
+    "data-dedup-csv",
+    "ops-docker-compose-stack",
+    "ops-nginx-reverse-proxy",
+    "writing-press-release-fintech",
+    "writing-design-doc-ratelimiter",
+    "writing-bug-postmortem-memleak",
+    "code-fastapi-crud-sqlite"
   ],
+
   "slow_ids": [
     "build-android-helloworld",
     "code-rest-api-flask",
     "ops-multi-step-deploy-dag",
-    "data-elt-pipeline-dag"
+    "data-elt-pipeline-dag",
+
+    "hard-code-async-rate-limiter",
+    "hard-code-graph-dijkstra",
+    "hard-code-streaming-csv-aggregator",
+    "hard-code-distributed-lock-postgres",
+    "hard-research-postgres-vs-mongo-1m",
+    "hard-writing-adr-message-queue",
+    "hard-ops-systemd-graceful-shutdown",
+    "hard-code-circular-buffer-concurrent"
   ],
+
   "tasks": [
     {
       "id": "build-py-cli-calc",
@@ -80,7 +104,7 @@
     {
       "id": "research-best-typed-langs",
       "task": "list 5 popular gradually-typed languages with one-line strengths",
-      "clarifications": {"format": "markdown table", "lens": "popularity 2025"},
+      "clarifications": {"format": "markdown table", "lens": "popularity 2026"},
       "expected": {
         "deliverable_files": [".*\\.md$"],
         "should_pass_review": true,
@@ -102,7 +126,7 @@
       "task": "Draft an incident postmortem for a 47-min outage caused by a runaway DB migration. Include timeline, root cause, mitigations.",
       "clarifications": {"format": "markdown", "tone": "blameless"},
       "expected": {
-        "deliverable_files": [".*postmortem.*\\.md$|.*\\.md$"],
+        "deliverable_files": [".*postmortem.*\\.md$"],
         "should_pass_review": true,
         "summary_must_mention": ["root cause"]
       }
@@ -218,6 +242,213 @@
       "clarifications": {"deliverables": "fetch.py + transform.py + load.py + runner.sh"},
       "expected": {
         "deliverable_files": ["fetch.py", "transform.py", "load.py", "runner.sh"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "code-cli-todo",
+      "task": "Build todo.py — a CLI that supports `add <text>`, `list`, `done <id>`, `rm <id>`. Persist to ~/.todo.json. Stdlib only. Include __main__ self-test that adds 2 items, marks one done, lists, removes one.",
+      "clarifications": {"deliverable": "todo.py", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["todo.py"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "code-decorator-memoize",
+      "task": "Implement memoize.py with a `@memoize(ttl_secs=N, max_size=M)` decorator. LRU eviction past max_size, expiry past ttl. Include test that proves: cache hits skip the wrapped function, expiry refreshes, LRU evicts the right entry.",
+      "clarifications": {"deliverable": "memoize.py", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["memoize.py"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "research-vector-db-comparison",
+      "task": "Compare Pinecone, Weaviate, Qdrant, and pgvector across these axes: hosted/self-host, pricing, max vector dim, hybrid search support, license. Output vector_dbs.md as a table + 2-paragraph recommendation for a 1M-vector personal project.",
+      "clarifications": {"deliverable": "vector_dbs.md", "format": "markdown table + prose"},
+      "expected": {
+        "deliverable_files": ["vector_dbs.md"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "research-llm-pricing-2026",
+      "task": "Compare per-1M-token pricing (input/output) for Claude Opus 4.7, GPT-5, Gemini 2 Pro, and DeepSeek V3 as of Jan 2026. Note context window for each. Output llm_pricing.md.",
+      "clarifications": {"deliverable": "llm_pricing.md", "as_of": "2026-01"},
+      "expected": {
+        "deliverable_files": ["llm_pricing.md"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "data-json-schema-validate",
+      "task": "Write validate_users.py that loads users.json (you generate 3 sample records, 1 invalid) and validates each against a JSON Schema (name: required str, age: required int 0-150, email: required string with @). Print pass/fail per record. Stdlib only — no jsonschema dependency.",
+      "clarifications": {"deliverables": "validate_users.py + users.json", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["validate_users.py", "users.json"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "data-dedup-csv",
+      "task": "Write dedup.py that reads sample.csv (cols: name, email, score), deduplicates rows by (name, email) keeping the highest score, writes deduped.csv sorted by score desc. Generate a 5-row sample with 2 duplicates as part of the task. Show before+after row counts in the log.",
+      "clarifications": {"deliverables": "dedup.py + sample.csv + deduped.csv", "stdlib_only": "yes"},
+      "expected": {
+        "deliverable_files": ["dedup.py", "sample.csv", "deduped.csv"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "ops-docker-compose-stack",
+      "task": "Write docker-compose.yml for a stack: Postgres 16 + Redis 7 + a Python 3.12 app (you don't need to write the app, just point to a Dockerfile that doesn't have to exist). Each service must have a healthcheck. Persist Postgres data with a named volume. Include a one-page README.md explaining how to start/stop/inspect.",
+      "clarifications": {"deliverables": "docker-compose.yml + README.md"},
+      "expected": {
+        "deliverable_files": ["docker-compose.yml", "README.md"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "ops-nginx-reverse-proxy",
+      "task": "Write nginx.conf for an HTTPS reverse proxy in front of localhost:8000. Must include: listen 443 with SSL, proxy_pass to upstream, gzip, rate_limit zone (10r/s per IP), security headers (HSTS, X-Frame-Options, CSP basic). Plus a NOTES.md explaining the rate-limit choice.",
+      "clarifications": {"deliverables": "nginx.conf + NOTES.md"},
+      "expected": {
+        "deliverable_files": ["nginx.conf", "NOTES.md"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "writing-press-release-fintech",
+      "task": "Write a 200-word press release announcing a fintech mobile app launch called 'Bridge'. App lets freelancers in India send/receive USD in their domestic accounts. Tone: professional, dateline format, includes one quote from CEO. Output press.md.",
+      "clarifications": {"deliverable": "press.md", "format": "markdown"},
+      "expected": {
+        "deliverable_files": ["press.md"],
+        "should_pass_review": true,
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "writing-design-doc-ratelimiter",
+      "task": "Write a 500-word design doc for a token-bucket rate limiter. Include: problem, design, alternatives considered (leaky bucket, fixed window), failure modes, monitoring/metrics, rollout plan. Output design.md.",
+      "clarifications": {"deliverable": "design.md"},
+      "expected": {
+        "deliverable_files": ["design.md"],
+        "should_pass_review": true,
+        "summary_must_mention": ["token bucket"],
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "writing-bug-postmortem-memleak",
+      "task": "Write a postmortem for a memory leak caused by an unbounded LRU cache in production. Include timeline (3 events), root cause analysis, immediate fix, longer-term prevention (e.g. cache_max_size cap, monitor RSS). 400 words max. Output postmortem.md.",
+      "clarifications": {"deliverable": "postmortem.md", "tone": "blameless"},
+      "expected": {
+        "deliverable_files": ["postmortem.md"],
+        "should_pass_review": true,
+        "summary_must_mention": ["memory"],
+        "max_loops": 2
+      }
+    },
+    {
+      "id": "code-fastapi-crud-sqlite",
+      "task": "Build app.py — a FastAPI service with /items CRUD backed by SQLite (sqlite3 stdlib). Endpoints: POST /items, GET /items, GET /items/{id}, PUT /items/{id}, DELETE /items/{id}. Include tests.py using FastAPI TestClient that exercises all 5 endpoints. Run tests and show output.",
+      "clarifications": {"deliverables": "app.py + tests.py", "stack": "FastAPI + sqlite3 stdlib"},
+      "expected": {
+        "deliverable_files": ["app.py", "tests.py"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+
+    {
+      "id": "hard-code-async-rate-limiter",
+      "task": "Implement async_rate_limit.py — an asyncio leaky-bucket rate limiter that allows max N requests per second. The bucket leaks evenly (no thundering herd at second boundaries). Include test_rate_limit.py that fires 50 concurrent callers at a 10/s limiter and asserts the 50th completes in roughly 5s, NOT all in second 1. Run the test and show timing output. The hard part: prove evenness, not just count.",
+      "clarifications": {"deliverables": "async_rate_limit.py + test_rate_limit.py", "stack": "asyncio stdlib only", "hard_constraint": "evenness — no thundering herd"},
+      "expected": {
+        "deliverable_files": ["async_rate_limit.py", "test_rate_limit.py"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-code-graph-dijkstra",
+      "task": "Implement dijkstra.py — Dijkstra's shortest path on a weighted directed graph. Use a heap-based priority queue. Include test_dijkstra.py with 3 cases: (1) classic 5-node graph with known shortest path, (2) disconnected graph (returns inf), (3) graph with multiple equal-cost paths (any one is valid). Performance assertion: 1000-node random graph completes in under 1 second.",
+      "clarifications": {"deliverables": "dijkstra.py + test_dijkstra.py", "stack": "heapq stdlib only"},
+      "expected": {
+        "deliverable_files": ["dijkstra.py", "test_dijkstra.py"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-code-streaming-csv-aggregator",
+      "task": "Write stream_agg.py that processes a 100MB CSV (you generate it: 1M rows, cols=user_id,country,amount). Aggregate total amount per country. CRITICAL CONSTRAINT: peak memory usage must be < 50MB (verifiable with resource.getrusage or psutil if installed). Output result.json sorted by total desc. Show before/after memory in the action log.",
+      "clarifications": {"deliverables": "stream_agg.py + result.json", "hard_constraint": "memory bounded under 50MB", "stack": "stdlib"},
+      "expected": {
+        "deliverable_files": ["stream_agg.py", "result.json"],
+        "should_pass_review": true,
+        "summary_must_mention": ["memory"],
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-code-distributed-lock-postgres",
+      "task": "Implement pg_lock.py — a distributed mutex using Postgres advisory locks (pg_advisory_lock / pg_advisory_unlock). API: `with PGLock('my_resource', dsn=...) as lock:`. Auto-releases on connection drop. Include test_pg_lock.py that spawns 2 processes contending for the same lock and proves only ONE holds it at a time. Use sqlite + a software shim if Postgres isn't available so the test still runs.",
+      "clarifications": {"deliverables": "pg_lock.py + test_pg_lock.py", "stack": "psycopg2 + multiprocessing"},
+      "expected": {
+        "deliverable_files": ["pg_lock.py", "test_pg_lock.py"],
+        "should_pass_review": true,
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-research-postgres-vs-mongo-1m",
+      "task": "Write postgres_vs_mongo_1m.md — a deep tradeoff analysis for choosing between Postgres and MongoDB for a 1M-user social app with feed, comments, and search. Be CONCRETE not generic: include actual replication strategies, sharding implications at this scale, query latency expectations (p50/p99), operational cost estimates, and 'when would I switch?'. Length: 1200-1800 words. Filler-heavy answers will fail review.",
+      "clarifications": {"deliverable": "postgres_vs_mongo_1m.md", "hard_constraint": "concrete numbers + scale-specific reasoning, not generic"},
+      "expected": {
+        "deliverable_files": ["postgres_vs_mongo_1m.md"],
+        "should_pass_review": true,
+        "summary_must_mention": ["replication", "sharding"],
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-writing-adr-message-queue",
+      "task": "Write adr-001-message-queue.md — an Architecture Decision Record choosing between AWS SQS, Kafka, and RabbitMQ for an order-processing system. Format: Status / Context / Decision / Consequences / 'What would change my mind' (this last section is mandatory and the hard part — no generic 'we'd reconsider'). 800-1200 words.",
+      "clarifications": {"deliverable": "adr-001-message-queue.md", "format": "Michael Nygard ADR template + What-would-change-my-mind"},
+      "expected": {
+        "deliverable_files": ["adr-001-message-queue.md"],
+        "should_pass_review": true,
+        "summary_must_mention": ["change my mind"],
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-ops-systemd-graceful-shutdown",
+      "task": "Build server.py + my-service.service. The Python service must (1) accept SIGTERM and gracefully drain in-flight HTTP requests over 30 seconds, (2) reject NEW requests during drain (return 503), (3) exit cleanly when drain completes OR after a 35s hard timeout. systemd unit must use TimeoutStopSec=40, KillSignal=SIGTERM, Restart=on-failure. Include test_drain.py that starts the server, fires 5 long requests, sends SIGTERM mid-flight, and verifies all 5 complete + new requests are rejected. Run the test.",
+      "clarifications": {"deliverables": "server.py + my-service.service + test_drain.py", "stack": "FastAPI or aiohttp + systemd"},
+      "expected": {
+        "deliverable_files": ["server.py", "my-service.service", "test_drain.py"],
+        "should_pass_review": true,
+        "summary_must_mention": ["SIGTERM", "drain"],
+        "max_loops": 3
+      }
+    },
+    {
+      "id": "hard-code-circular-buffer-concurrent",
+      "task": "Implement ringbuf.py — a thread-safe bounded circular buffer with put_nowait / get_nowait / put / get. Backpressure: full buffer blocks producers; empty buffer blocks consumers. Include test_ringbuf.py with TWO scenarios: (1) 10 producers + 10 consumers + buffer-of-100 all running concurrently for 10000 messages each, no message lost or duplicated. (2) Single consumer dies mid-stream — producers eventually block but don't deadlock once a new consumer starts. Use threading + Lock + Condition; no asyncio. Run both tests.",
+      "clarifications": {"deliverables": "ringbuf.py + test_ringbuf.py", "stack": "threading stdlib", "hard_constraint": "no message lost/duplicated under concurrency; no deadlock on consumer death"},
+      "expected": {
+        "deliverable_files": ["ringbuf.py", "test_ringbuf.py"],
         "should_pass_review": true,
         "max_loops": 3
       }
