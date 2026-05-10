@@ -1,0 +1,733 @@
+{
+  "summary": {
+    "total": 40,
+    "pass": 37,
+    "fail": 3,
+    "error": 0,
+    "pass_rate": 92.5
+  },
+  "results": [
+    {
+      "id": "build-py-cli-calc",
+      "task_id": "f27b7fce9f39",
+      "status": "done",
+      "duration_secs": 74.7,
+      "cost": {
+        "databricks_input_tokens": 18006,
+        "databricks_output_tokens": 2355,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "next_steps_must_include_any_of": true
+      }
+    },
+    {
+      "id": "research-mango-list",
+      "task_id": "6d0b6454275a",
+      "status": "done",
+      "duration_secs": 53.5,
+      "cost": {
+        "databricks_input_tokens": 11636,
+        "databricks_output_tokens": 1999,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "build-android-helloworld",
+      "task_id": "7c209f4de4fc",
+      "status": "done",
+      "duration_secs": 406.2,
+      "cost": {
+        "databricks_input_tokens": 173973,
+        "databricks_output_tokens": 4323,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "research-postgres-vs-sqlite",
+      "task_id": "d8ba9068ee6b",
+      "status": "done",
+      "duration_secs": 127.9,
+      "cost": {
+        "databricks_input_tokens": 14797,
+        "databricks_output_tokens": 2921,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-product-spec",
+      "task_id": "b32d61c8bb9c",
+      "status": "done",
+      "duration_secs": 65.0,
+      "cost": {
+        "databricks_input_tokens": 12196,
+        "databricks_output_tokens": 1993,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "research-best-typed-langs",
+      "task_id": "212026ed3f8d",
+      "status": "done",
+      "duration_secs": 61.2,
+      "cost": {
+        "databricks_input_tokens": 11808,
+        "databricks_output_tokens": 1453,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-launch-blog",
+      "task_id": "bcc54f44a77f",
+      "status": "done",
+      "duration_secs": 205.2,
+      "cost": {
+        "databricks_input_tokens": 31426,
+        "databricks_output_tokens": 2805,
+        "claude_usd": 0.0
+      },
+      "loops": 3,
+      "outcome": "FAIL",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": false
+      }
+    },
+    {
+      "id": "writing-incident-postmortem",
+      "task_id": "dfd77426ff7a",
+      "status": "done",
+      "duration_secs": 127.1,
+      "cost": {
+        "databricks_input_tokens": 16519,
+        "databricks_output_tokens": 2479,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "data-csv-to-md",
+      "task_id": "9ae8b804e46e",
+      "status": "done",
+      "duration_secs": 38.9,
+      "cost": {
+        "databricks_input_tokens": 11877,
+        "databricks_output_tokens": 1528,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "data-extract-emails",
+      "task_id": "5aa8277976d1",
+      "status": "done",
+      "duration_secs": 54.8,
+      "cost": {
+        "databricks_input_tokens": 14670,
+        "databricks_output_tokens": 2444,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "ops-cron-template",
+      "task_id": "85c3a059214b",
+      "status": "done",
+      "duration_secs": 50.5,
+      "cost": {
+        "databricks_input_tokens": 14416,
+        "databricks_output_tokens": 1942,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "ops-systemd-unit",
+      "task_id": "7cf176103f99",
+      "status": "done",
+      "duration_secs": 55.4,
+      "cost": {
+        "databricks_input_tokens": 15116,
+        "databricks_output_tokens": 2483,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "code-fix-typo",
+      "task_id": "12316cc210df",
+      "status": "done",
+      "duration_secs": 34.2,
+      "cost": {
+        "databricks_input_tokens": 13502,
+        "databricks_output_tokens": 1241,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-fizzbuzz",
+      "task_id": "6c06ae790903",
+      "status": "done",
+      "duration_secs": 45.4,
+      "cost": {
+        "databricks_input_tokens": 14360,
+        "databricks_output_tokens": 1730,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-anagram-checker",
+      "task_id": "0838ef0fa771",
+      "status": "done",
+      "duration_secs": 46.4,
+      "cost": {
+        "databricks_input_tokens": 14187,
+        "databricks_output_tokens": 1812,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-shell-script-summary",
+      "task_id": "b5e052a8125d",
+      "status": "done",
+      "duration_secs": 53.2,
+      "cost": {
+        "databricks_input_tokens": 15373,
+        "databricks_output_tokens": 2176,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "research-rate-limit-strategies",
+      "task_id": "dc4758c2ca18",
+      "status": "done",
+      "duration_secs": 62.1,
+      "cost": {
+        "databricks_input_tokens": 11934,
+        "databricks_output_tokens": 2042,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true
+      }
+    },
+    {
+      "id": "code-rest-api-flask",
+      "task_id": "16d8f2223bca",
+      "status": "done",
+      "duration_secs": 69.0,
+      "cost": {
+        "databricks_input_tokens": 18219,
+        "databricks_output_tokens": 2693,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "ops-multi-step-deploy-dag",
+      "task_id": "741f93a5f055",
+      "status": "done",
+      "duration_secs": 253.0,
+      "cost": {
+        "databricks_input_tokens": 68201,
+        "databricks_output_tokens": 4873,
+        "claude_usd": 0.0
+      },
+      "loops": 2,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "data-elt-pipeline-dag",
+      "task_id": "e7929e645dd9",
+      "status": "done",
+      "duration_secs": 129.2,
+      "cost": {
+        "databricks_input_tokens": 37311,
+        "databricks_output_tokens": 3430,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-cli-todo",
+      "task_id": "a5ac3db90c81",
+      "status": "done",
+      "duration_secs": 78.9,
+      "cost": {
+        "databricks_input_tokens": 19415,
+        "databricks_output_tokens": 3143,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "code-decorator-memoize",
+      "task_id": "cb01b5147cc8",
+      "status": "done",
+      "duration_secs": 207.6,
+      "cost": {
+        "databricks_input_tokens": 20433,
+        "databricks_output_tokens": 2912,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "research-vector-db-comparison",
+      "task_id": "853331cc8c9a",
+      "status": "done",
+      "duration_secs": 230.1,
+      "cost": {
+        "databricks_input_tokens": 16345,
+        "databricks_output_tokens": 2986,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "research-llm-pricing-2026",
+      "task_id": "95f820f9f174",
+      "status": "failed",
+      "duration_secs": 1274.9,
+      "cost": {
+        "databricks_input_tokens": 372060,
+        "databricks_output_tokens": 10592,
+        "claude_usd": 0.0
+      },
+      "loops": 3,
+      "outcome": "FAIL",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": false,
+        "max_loops": false
+      }
+    },
+    {
+      "id": "data-json-schema-validate",
+      "task_id": "6256b396aaea",
+      "status": "done",
+      "duration_secs": 59.3,
+      "cost": {
+        "databricks_input_tokens": 18592,
+        "databricks_output_tokens": 2400,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "data-dedup-csv",
+      "task_id": "5dc5921f138c",
+      "status": "done",
+      "duration_secs": 59.3,
+      "cost": {
+        "databricks_input_tokens": 18594,
+        "databricks_output_tokens": 2865,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "ops-docker-compose-stack",
+      "task_id": "4a12c9c83fda",
+      "status": "done",
+      "duration_secs": 83.4,
+      "cost": {
+        "databricks_input_tokens": 13299,
+        "databricks_output_tokens": 3047,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "ops-nginx-reverse-proxy",
+      "task_id": "31be34aa7ef1",
+      "status": "done",
+      "duration_secs": 88.2,
+      "cost": {
+        "databricks_input_tokens": 16961,
+        "databricks_output_tokens": 3376,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-press-release-fintech",
+      "task_id": "724aed7ec030",
+      "status": "done",
+      "duration_secs": 54.2,
+      "cost": {
+        "databricks_input_tokens": 13635,
+        "databricks_output_tokens": 1897,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "writing-design-doc-ratelimiter",
+      "task_id": "6f179e7fa38f",
+      "status": "done",
+      "duration_secs": 132.0,
+      "cost": {
+        "databricks_input_tokens": 17012,
+        "databricks_output_tokens": 2344,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "FAIL",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": false
+      }
+    },
+    {
+      "id": "writing-bug-postmortem-memleak",
+      "task_id": "c5cfbd2f96d5",
+      "status": "done",
+      "duration_secs": 74.0,
+      "cost": {
+        "databricks_input_tokens": 18472,
+        "databricks_output_tokens": 2248,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "code-fastapi-crud-sqlite",
+      "task_id": "05c3fea0797a",
+      "status": "done",
+      "duration_secs": 80.1,
+      "cost": {
+        "databricks_input_tokens": 27809,
+        "databricks_output_tokens": 3247,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "hard-code-async-rate-limiter",
+      "task_id": "290bad12bcdd",
+      "status": "done",
+      "duration_secs": 94.6,
+      "cost": {
+        "databricks_input_tokens": 21708,
+        "databricks_output_tokens": 3512,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "hard-code-graph-dijkstra",
+      "task_id": "d3a19c347e85",
+      "status": "done",
+      "duration_secs": 131.4,
+      "cost": {
+        "databricks_input_tokens": 32911,
+        "databricks_output_tokens": 3590,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "hard-code-streaming-csv-aggregator",
+      "task_id": "ef3aba3ab14f",
+      "status": "done",
+      "duration_secs": 77.2,
+      "cost": {
+        "databricks_input_tokens": 22410,
+        "databricks_output_tokens": 3150,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "hard-code-distributed-lock-postgres",
+      "task_id": "5451119e6b4b",
+      "status": "done",
+      "duration_secs": 310.7,
+      "cost": {
+        "databricks_input_tokens": 23925,
+        "databricks_output_tokens": 3808,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    },
+    {
+      "id": "hard-research-postgres-vs-mongo-1m",
+      "task_id": "394e0cd5e4ce",
+      "status": "done",
+      "duration_secs": 200.3,
+      "cost": {
+        "databricks_input_tokens": 26697,
+        "databricks_output_tokens": 4237,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "hard-writing-adr-message-queue",
+      "task_id": "f590d9cf16fc",
+      "status": "done",
+      "duration_secs": 160.7,
+      "cost": {
+        "databricks_input_tokens": 24584,
+        "databricks_output_tokens": 3637,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "hard-ops-systemd-graceful-shutdown",
+      "task_id": "27d416c098e8",
+      "status": "done",
+      "duration_secs": 324.8,
+      "cost": {
+        "databricks_input_tokens": 32019,
+        "databricks_output_tokens": 4057,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true,
+        "summary_must_mention": true
+      }
+    },
+    {
+      "id": "hard-code-circular-buffer-concurrent",
+      "task_id": "0715629c8456",
+      "status": "done",
+      "duration_secs": 274.0,
+      "cost": {
+        "databricks_input_tokens": 23791,
+        "databricks_output_tokens": 3777,
+        "claude_usd": 0.0
+      },
+      "loops": 1,
+      "outcome": "PASS",
+      "checks": {
+        "deliverable_files": true,
+        "should_pass_review": true,
+        "max_loops": true
+      }
+    }
+  ]
+}
