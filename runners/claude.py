@@ -1,60 +1,36 @@
+"""ClaudeRunner — headless Claude Code subprocess wrapper.
+
+Spawns `claude --output-format stream-json` against the per-task
+workspace, parses every line into a ClaudeEvent, optionally forwards
+each event to a caller-supplied callback (used by the supervisor to
+stream into SSE / STORE), and returns a TaskResult at the end.
+
+Why headless: the supervisor needs to OBSERVE every action Claude
+takes (so it can review them, log them, surface them to the user),
+which the interactive Claude CLI doesn't make easy. The stream-json
+output format is structured enough to drive everything we need.
+
+Notable internals:
+  • 64MB StreamReader limit — `--output-format stream-json` lines can
+    contain large tool_result chunks (workspace listings, big stdout).
+    The default 64KB limit silently kills the run with "Separator not
+    found" mid-task. See run().
+  • interrupt() does SIGTERM + 5s SIGKILL escalation (round-3 fix #11)
+    — prevents zombie Claude subprocesses when the CLI is stuck in a
+    heavy build / hung syscall.
+  • `--resume <session_id>` is supported; pass `session_id` to run()
+    to continue a previous Claude conversation instead of starting fresh.
+"""
 import asyncio
 import json
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from config import ALLOWED_TOOLS, HOOK_SCRIPT
+from config import ALLOWED_TOOLS
 
-
-@dataclass
-class ClaudeEvent:
-    type: str
-    tool_name: str | None = None
-    tool_input: dict = field(default_factory=dict)
-    tool_output: str | None = None
-    text: str | None = None
-    session_id: str | None = None
-    is_error: bool = False
-    raw: dict = field(default_factory=dict)
-
-
-@dataclass
-class TaskResult:
-    success: bool
-    session_id: str | None
-    output: str
-    events: list[ClaudeEvent]
-    cost_usd: float | None = None
-
-
-def install_hooks(workspace: Path, hook_log_path: Path) -> dict:
-    settings_dir = workspace / ".claude"
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    settings_path = settings_dir / "settings.json"
-
-    hook_command = (
-        f"SUPERVISOR_HOOK_LOG={hook_log_path} "
-        f"SUPERVISOR_WORKSPACE={workspace} "
-        f"python3 {HOOK_SCRIPT}"
-    )
-    settings = {
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "matcher": "Bash|Write|Edit|MultiEdit",
-                    "hooks": [{"type": "command", "command": hook_command}],
-                },
-                {
-                    "matcher": "mcp__.*",
-                    "hooks": [{"type": "command", "command": hook_command}],
-                },
-            ]
-        }
-    }
-    settings_path.write_text(json.dumps(settings, indent=2))
-    return settings
+from .events import ClaudeEvent, TaskResult
+from .hooks import install_hooks
 
 
 class ClaudeRunner:
@@ -85,12 +61,12 @@ class ClaudeRunner:
         env["SUPERVISOR_HOOK_LOG"] = str(self.hook_log_path)
         env["SUPERVISOR_WORKSPACE"] = str(self.working_dir)
 
-        # V3.5 fix: default asyncio StreamReader limit is 64KB, which fails on
-        # `--output-format stream-json` lines that contain large tool_result
-        # chunks (e.g. workspace listings, big stdout). Bump to 64MB so single
-        # JSONL events of any reasonable size are read intact. Symptom without
-        # this: "Separator is not found, and chunk exceed the limit" → task
-        # killed mid-run.
+        # V3.5 fix: default asyncio StreamReader limit is 64KB, which fails
+        # on `--output-format stream-json` lines that contain large
+        # tool_result chunks (e.g. workspace listings, big stdout). Bump to
+        # 64MB so single JSONL events of any reasonable size are read
+        # intact. Without this, we got "Separator is not found, and chunk
+        # exceed the limit" mid-task and the run died.
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.DEVNULL,
@@ -156,24 +132,26 @@ class ClaudeRunner:
         )
 
     def interrupt(self):
-        """V3.5 round-3 fix #11: SIGTERM, then escalate to SIGKILL in 5s if
-        the process still hasn't exited. Prevents zombie Claude subprocesses
+        """Round-3 fix #11: SIGTERM, then escalate to SIGKILL in 5s if the
+        process still hasn't exited. Prevents zombie Claude subprocesses
         when the CLI is stuck in a heavy build / hung syscall and ignores
-        SIGTERM. Best-effort — works whether or not we're inside an event loop."""
+        SIGTERM. Best-effort — works whether or not we're inside an
+        event loop."""
         if not self._process or self._process.returncode is not None:
             return
         try:
             self._process.terminate()
         except ProcessLookupError:
             return
-        # Schedule the escalation. If we're inside a running event loop, fire
-        # an async timer; otherwise rely on the caller's `wait()` + 10s timeout
-        # in run() that already escalates via interrupt() recursion (idempotent).
+        # Schedule the escalation. If we're inside a running event loop,
+        # fire an async timer; otherwise rely on the caller's `wait()` +
+        # 10s timeout in run() that already escalates via interrupt()
+        # recursion (idempotent).
         try:
             loop = asyncio.get_running_loop()
             loop.call_later(5.0, self._escalate_kill)
         except RuntimeError:
-            pass  # no loop running — sync context, escalation deferred to run()'s wait
+            pass  # no loop running — sync context, deferred to run()'s wait
 
     def _escalate_kill(self):
         if self._process and self._process.returncode is None:

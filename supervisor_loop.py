@@ -11,7 +11,7 @@ import re
 import time
 from pathlib import Path
 
-from claude_runner import ClaudeEvent, ClaudeRunner
+from runners import ClaudeEvent, ClaudeRunner
 from config import (
     ESCALATION_AUTO_RESOLVE_SECS,
     LOG_ROOT,

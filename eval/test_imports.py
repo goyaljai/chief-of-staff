@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config  # noqa: F401  -- loads .env
 
 modules = [
-    "persistence", "rag", "claude_runner", "workflows.dag",
+    "persistence", "rag", "runners", "workflows.dag",
     "agents", "supervisor_loop", "main",
 ]
 
