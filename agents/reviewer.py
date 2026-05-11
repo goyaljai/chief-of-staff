@@ -58,6 +58,57 @@ class Reviewer:
             "message": data.get("message", ""),
         }
 
+    def drift_check(
+        self,
+        goal: str,
+        recent_actions: str,
+        workspace: str | None = None,
+        inline_skill: str = "",
+    ) -> dict:
+        """B4 — periodic drift check on read-heavy streaks.
+
+        Why this is its own method instead of reusing review_action:
+        review_action's user message hardcodes ``Tool: <name>`` and
+        ``Input: <json>`` because every per-action review is grading a
+        SPECIFIC tool call. Passing tool_name='(self_check)' through that
+        path produced JSON like ``{"decision": "approve"}`` ~always — the
+        LLM had no anchor for *what* to grade. The B4 ship-dark bug.
+
+        This method drops the tool framing entirely and asks the model
+        to look at the trajectory: are the last N actions making progress
+        toward the goal, or is Claude stuck looping / over-reading /
+        researching without acting? Returns the same decision schema as
+        review_action so the supervisor's elevation paths (escalate /
+        correct / approve / request_evidence) work unchanged.
+        """
+        skills = _load_skills(workspace=workspace, inline_skill=inline_skill)
+        user = (
+            f"Goal: {goal}\n\n"
+            f"Recent actions (last ~30):\n{recent_actions}\n\n"
+            "Phase: drift check. Claude has just done several non-side-effecting "
+            "actions in a row (Read / Grep / WebFetch / etc.) — no Write, Edit, "
+            "or Bash. Look at the trajectory:\n"
+            "  • Are these actions making progress toward the goal, or is Claude "
+            "looping (re-reading the same file, re-grepping the same pattern)?\n"
+            "  • Has Claude been researching for so long that it should now "
+            "*act* — write code, run a verification, produce the deliverable?\n"
+            "  • Is the chosen path the right one, or is it going down a rabbit "
+            "hole the goal didn't ask for?\n\n"
+            "Return JSON only: {\"decision\": \"approve\"|\"correct\"|\"escalate\"|"
+            "\"request_evidence\", \"message\": \"...\"}.\n"
+            "  • approve  → trajectory looks fine, keep going\n"
+            "  • correct  → wrong direction; the message will be sent to Claude "
+            "mid-stream as coaching\n"
+            "  • escalate → blocked / needs user decision\n"
+            "  • request_evidence → ambiguous; ask Claude to show its work"
+        )
+        raw = _chat(self.system, user, max_tokens=512, skills_context=skills)
+        data = _extract_json(raw)
+        return {
+            "decision": data.get("decision", "approve"),
+            "message": data.get("message", ""),
+        }
+
     def final_review(
         self,
         goal: str,

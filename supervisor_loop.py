@@ -246,14 +246,12 @@ class SupervisorLoop:
         bearing. If the Reviewer LLM 500s, log it and move on.
         """
         try:
-            review = self.reviewer.review_action(
+            # #82: use drift_check (purpose-built prompt) instead of
+            # shoehorning a synthetic tool_name into review_action — that
+            # produced malformed JSON → silent default to 'approve' →
+            # B4 shipped dark.
+            review = self.reviewer.drift_check(
                 goal=self.task.goal,
-                tool_name="(self_check)",
-                tool_input={
-                    "trigger": "drift_check",
-                    "streak_of_non_reviewed_tools": SELF_CHECK_AFTER_N_NON_REVIEWED,
-                    "last_tool": last_event.tool_name,
-                },
                 recent_actions=_summarize_log(self.task.log, limit=30),
                 workspace=str(self.workspace),
                 inline_skill="",
@@ -516,7 +514,18 @@ class SupervisorLoop:
                     self.task.result = {"success": False, "error": f"claude run failed: {e}"}
                     return
 
-                session_id = result.session_id
+                # B1 #81: never overwrite a good session_id with None.
+                # If runner.interrupt() fires before claude emits its
+                # `system/init` event (e.g. reviewer flags the very first
+                # tool, or SIGTERM races init), result.session_id is None.
+                # Unconditional assignment would clobber the prior good id,
+                # making the next --resume omit the flag entirely (since
+                # _build_command only adds --resume on truthy session_id),
+                # spawning a fresh Claude with no continuity. The coaching
+                # prompt then says "Continue from where you left off" to a
+                # session that has no "where".
+                if result.session_id:
+                    session_id = result.session_id
 
                 # B1: did the reviewer ask us to coach mid-stream?
                 if self._mid_stream_coaching:

@@ -41,7 +41,11 @@ class _StubReviewer:
         self.message = message
 
     def review_action(self, **kwargs):
-        self.calls.append(kwargs)
+        self.calls.append({"method": "review_action", **kwargs})
+        return {"decision": self.decision, "message": self.message}
+
+    def drift_check(self, **kwargs):
+        self.calls.append({"method": "drift_check", **kwargs})
         return {"decision": self.decision, "message": self.message}
 
 
@@ -97,9 +101,10 @@ def test_streak_triggers_one_self_check():
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED):
         loop._on_event(_read_event())
 
-    # The Nth read should have triggered the self-check.
+    # The Nth read should have triggered the self-check via drift_check (#82).
     assert len(loop.reviewer.calls) == 1, f"expected 1 self-check, got {len(loop.reviewer.calls)}"
-    assert loop.reviewer.calls[0]["tool_name"] == "(self_check)"
+    assert loop.reviewer.calls[0]["method"] == "drift_check", \
+        "B4 must call Reviewer.drift_check, not review_action"
     assert loop._self_check_count == 1
     assert loop._streak_non_reviewed == 0, "streak must reset after firing"
     print(f"  ✓ self-check fired exactly once after {SELF_CHECK_AFTER_N_NON_REVIEWED} reads")
@@ -119,7 +124,9 @@ def test_side_effecting_tool_resets_streak():
     loop._on_event(_bash_event())
     assert loop._streak_non_reviewed == 0
     assert len(loop.reviewer.calls) == 1
-    assert loop.reviewer.calls[0]["tool_name"] == "Bash"  # NOT (self_check)
+    assert loop.reviewer.calls[0]["method"] == "review_action", \
+        "Bash should call review_action (per-action gate), not drift_check"
+    assert loop.reviewer.calls[0]["tool_name"] == "Bash"
 
     # Another 3 reads — still not enough; no NEW self-check
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED - 1):
