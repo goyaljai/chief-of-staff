@@ -221,9 +221,23 @@ async def _launch(update: Update, context: ContextTypes.DEFAULT_TYPE, task: str,
         return
 
     task_id = data["task_id"]
+    # Critical: stash the active task_id so the next user message gets
+    # folded as a note instead of being misinterpreted as a brand-new
+    # task. Without this, casual acks like "Sure" / "ok" / "thanks"
+    # spawn a fresh /task/questions round-trip — confusing as hell.
+    # receive_task() reads chat_data['task_id'] and only kicks off a
+    # new task when the active one is in a terminal status (or absent).
+    context.chat_data["task_id"] = task_id
+    # Clear the ASKING-flow scratch state so it doesn't leak into the
+    # next conversation.
+    for k in ("questions", "answers", "q_index", "task_text"):
+        context.chat_data.pop(k, None)
+
     await context.bot.send_message(
         chat_id,
-        f"Started task {task_id}. I'll ping you when there's news.",
+        f"Started task {task_id}. I'll ping you when there's news.\n\n"
+        "(reply with 'new: <prompt>' or /reset to start a fresh task — anything "
+        "else gets folded into the current task as a note)",
     )
 
     asyncio.create_task(_send_action_line(context, chat_id, task_id))

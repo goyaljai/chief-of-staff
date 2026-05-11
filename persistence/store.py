@@ -63,6 +63,7 @@ class TaskState:
         return {
             "id": self.id,
             "goal": self.goal,
+            "clarifications": self.clarifications,
             "status": self.status,
             "workspace": self.workspace,
             "skill_md": self.skill_md,

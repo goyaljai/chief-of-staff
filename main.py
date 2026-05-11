@@ -137,12 +137,40 @@ async def startup():
 
     asyncio.create_task(workspace_sweeper_loop())
 
+    # Bake the Telegram bot into the FastAPI lifespan so a single
+    # `uvicorn main:app` boots the whole system — server + bot. Stash
+    # the Application object in app.state so shutdown_hook can stop it
+    # cleanly. If TELEGRAM_BOT_TOKEN is unset (or build fails), we log
+    # and continue — the bot is optional.
+    try:
+        from integrations.telegram.bot import build_app as _build_tg_app
+        tg = _build_tg_app()
+        await tg.initialize()
+        await tg.start()
+        await tg.updater.start_polling()
+        app.state.telegram_app = tg
+        print("[main] telegram bot started (long-polling)")
+    except Exception as e:
+        app.state.telegram_app = None
+        print(f"[main] telegram bot not started: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_hook():
     """uvicorn calls this on SIGINT/SIGTERM as part of its native shutdown.
     drain_inflight() is idempotent (checks _SHUTTING_DOWN at start), so
     if anything else has already drained the call is a no-op."""
+    # Stop the embedded Telegram bot first so it doesn't try to send
+    # messages mid-drain.
+    tg = getattr(app.state, "telegram_app", None)
+    if tg is not None:
+        try:
+            await tg.updater.stop()
+            await tg.stop()
+            await tg.shutdown()
+            print("[main] telegram bot stopped")
+        except Exception as e:
+            print(f"[main] telegram bot shutdown error (ok): {e}")
     await drain_inflight()
 
 

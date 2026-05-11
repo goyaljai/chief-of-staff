@@ -81,6 +81,12 @@ async def _poll_task(context: ContextTypes.DEFAULT_TYPE, chat_id: int, task_id: 
     and dispatches to _send_escalation / _send_completion when those
     events fire."""
     last_status: str | None = None
+    # Bug #4 fix: surface DAG step transitions so the user isn't staring
+    # at a silent chat for 5+ minutes during a multi-step build (Android
+    # gradle, RN expo export, etc.). We announce when each step starts
+    # and finishes, but only once — no spam on every poll.
+    announced_started: set[str] = set()
+    announced_done: set[str] = set()
     while True:
         try:
             async with httpx.AsyncClient() as client:
@@ -109,6 +115,36 @@ async def _poll_task(context: ContextTypes.DEFAULT_TYPE, chat_id: int, task_id: 
                 await context.bot.send_message(
                     chat_id,
                     f"🔄 Starting correction loop {loop_n}...",
+                )
+            elif status == "executing_dag":
+                await context.bot.send_message(
+                    chat_id,
+                    "🛠️ Running parallel build steps — I'll narrate progress as steps land.",
+                )
+
+        # Bug #4 fix: announce DAG step transitions even when the umbrella
+        # status doesn't change. dag_progress is a {step_id: {count, last}}
+        # map; "started" = first time we see it, "done" = a 'result' event.
+        dag_progress = state.get("dag_progress") or {}
+        for step_id, p in dag_progress.items():
+            if step_id not in announced_started and p.get("count", 0) > 0:
+                announced_started.add(step_id)
+                last_text = (p.get("last") or "").strip().split("\n")[0][:140]
+                tail = f" — {last_text}" if last_text else ""
+                await context.bot.send_message(
+                    chat_id, f"▶️ Step `{step_id}` started{tail}",
+                )
+        # Find dag_step_event entries with event_type=result for completion.
+        for e in (state.get("log_tail") or []):
+            if (e.get("kind") == "dag_step_event"
+                    and e.get("event_type") == "result"
+                    and e.get("step_id")
+                    and e["step_id"] not in announced_done):
+                announced_done.add(e["step_id"])
+                tail = (e.get("text") or "").strip().split("\n")[0][:140]
+                tailmsg = f" — {tail}" if tail else ""
+                await context.bot.send_message(
+                    chat_id, f"✅ Step `{e['step_id']}` completed{tailmsg}",
                 )
 
         if status == "escalated":
@@ -166,3 +202,81 @@ async def _send_completion(context, chat_id: int, task_id: str, state: dict):
     text += f"\n\nWorkspace: {workspace}"
 
     await context.bot.send_message(chat_id, text)
+
+    # Bug #1 fix: send the actual deliverable artifacts back in chat.
+    # User explicitly asked "send it to me here" — text alone isn't enough.
+    await _send_artifacts(context, chat_id, state)
+
+
+_ARTIFACT_NOISE_DIRS = ("node_modules/", "_hooks/", "dist/", ".git/", "venv/",
+                        "__pycache__/", ".gradle/", ".idea/", "build/intermediates/",
+                        "Pods/", "DerivedData/")
+_TG_DOC_MAX_BYTES = 49 * 1024 * 1024  # 1MB headroom under TG's 50MB cap
+
+
+def _is_user_facing_artifact(path: str) -> bool:
+    return not any(noise in path for noise in _ARTIFACT_NOISE_DIRS)
+
+
+async def _send_artifacts(context, chat_id: int, state: dict):
+    """Send up to 3 user-facing deliverable artifacts as Telegram documents.
+
+    Priority order:
+      1. Files whose name appears in result.summary / next_steps (the
+         orchestrator's named deliverable, e.g. 'hello-world-android.apk').
+      2. Files at workspace root (no '/' in path) — usually the deliverable
+         + README.
+      3. Other user-facing files (filtered against build-noise dirs).
+
+    Telegram caps each document at 50MB; we cap at 49MB. We send at most 3
+    files per task to keep the chat clean. If we skip files (oversize or
+    over the cap), we tell the user with a one-liner.
+    """
+    import os
+    workspace = state.get("workspace") or ""
+    result = state.get("result") or {}
+    artifacts = state.get("artifacts") or []
+    if not workspace or not artifacts:
+        return
+
+    summary_text = ((result.get("summary") or "") + " " + (result.get("next_steps") or "")).lower()
+    candidates = [a for a in artifacts
+                  if a.get("path") and _is_user_facing_artifact(a["path"])
+                  and 0 < (a.get("size_bytes") or 0) <= _TG_DOC_MAX_BYTES]
+
+    def _priority(a):
+        name = (a["path"].rsplit("/", 1)[-1]).lower()
+        named_in_summary = name and name in summary_text
+        is_root = "/" not in a["path"]
+        return (0 if named_in_summary else (1 if is_root else 2),
+                -(a.get("size_bytes") or 0))
+
+    candidates.sort(key=_priority)
+    top = candidates[:3]
+
+    sent = 0
+    for a in top:
+        abs_path = a.get("abs_path") or os.path.join(workspace, a["path"])
+        try:
+            with open(abs_path, "rb") as fh:
+                await context.bot.send_document(
+                    chat_id,
+                    document=fh,
+                    filename=a["path"].rsplit("/", 1)[-1],
+                    caption=f"📎 {a['path']}",
+                )
+            sent += 1
+        except Exception as e:
+            log.warning("send_document(%s) failed: %s", abs_path, e)
+
+    skipped_oversize = sum(1 for a in artifacts
+                           if a.get("path") and _is_user_facing_artifact(a["path"])
+                           and (a.get("size_bytes") or 0) > _TG_DOC_MAX_BYTES)
+    extras = max(0, len(candidates) - sent)
+    if sent and (extras or skipped_oversize):
+        notes = []
+        if extras:
+            notes.append(f"+{extras} more user-facing file(s) in workspace")
+        if skipped_oversize:
+            notes.append(f"{skipped_oversize} file(s) > 50MB (Telegram limit)")
+        await context.bot.send_message(chat_id, " · ".join(notes))
