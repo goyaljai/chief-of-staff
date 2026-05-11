@@ -46,8 +46,17 @@ async def _get_async_checkpointer():
         from psycopg_pool import AsyncConnectionPool
         pool = AsyncConnectionPool(
             conninfo=dsn,
+            min_size=0,
             max_size=4,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
+            # prepare_threshold=None disables psycopg3's auto-prepared
+            # statements entirely. Required for Supabase's transaction
+            # pooler (port 6543), which can route consecutive queries from
+            # the same client to different backend connections — a PREPARE
+            # on connection A then EXECUTE on connection B fails with
+            # `prepared statement "_pg3_0" already exists` (or "doesn't
+            # exist", depending on direction). Setting 0 ("always prepare")
+            # makes the problem worse, not better. None is the disable.
+            kwargs={"autocommit": True, "prepare_threshold": None},
             open=False,
         )
         await pool.open()
