@@ -63,7 +63,13 @@ class _FakeRunner:
         events_for_this_run = _SCRIPT.pop(0) if _SCRIPT else []
         for ev in events_for_this_run:
             if on_event:
-                on_event(ev)
+                # #83: on_event may be sync OR async — mirror the
+                # production runner's await-if-coroutine handling so
+                # the supervisor's elevation paths get a chance to run
+                # before we move to the next event.
+                _r = on_event(ev)
+                if asyncio.iscoroutine(_r):
+                    await _r
             # Simulate a tiny gap between events so the test exercises
             # the same async ordering real runners produce.
             await asyncio.sleep(0)

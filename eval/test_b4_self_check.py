@@ -3,6 +3,10 @@
 Exercises SupervisorLoop._on_event directly (no Claude subprocess, no
 inner-loop) and confirms:
 
+Note: _on_event is async (#83 — reviewer LLM hops onto a thread via
+run_in_executor so we don't pause Claude during the per-action call).
+Tests are async and driven by asyncio.run().
+
   1. A streak of N non-side-effecting tool_uses triggers exactly ONE
      self-check (the streak then resets).
   2. A side-effecting tool resets the streak — even if N reads
@@ -11,6 +15,7 @@ inner-loop) and confirms:
   4. A self-check returning ``decision=correct`` elevates to B1's
      mid-stream coaching path (sets _mid_stream_coaching + interrupts).
 """
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -94,12 +99,12 @@ def _bash_event() -> ClaudeEvent:
     return ClaudeEvent(type="tool_use", tool_name="Bash", tool_input={"command": "ls"})
 
 
-def test_streak_triggers_one_self_check():
+async def test_streak_triggers_one_self_check():
     print("\n--- Test 1: N read-only tool_uses → exactly one self-check ---")
     loop = _make_loop()
 
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED):
-        loop._on_event(_read_event())
+        await loop._on_event(_read_event())
 
     # The Nth read should have triggered the self-check via drift_check (#82).
     assert len(loop.reviewer.calls) == 1, f"expected 1 self-check, got {len(loop.reviewer.calls)}"
@@ -111,17 +116,17 @@ def test_streak_triggers_one_self_check():
     print(f"  ✓ streak reset to 0 after firing")
 
 
-def test_side_effecting_tool_resets_streak():
+async def test_side_effecting_tool_resets_streak():
     print("\n--- Test 2: side-effecting tool resets streak ---")
     loop = _make_loop()
 
     # 3 reads (just under threshold of 4)
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED - 1):
-        loop._on_event(_read_event())
+        await loop._on_event(_read_event())
     assert loop._streak_non_reviewed == SELF_CHECK_AFTER_N_NON_REVIEWED - 1
 
     # One Bash — per-action review fires (1 call), streak resets
-    loop._on_event(_bash_event())
+    await loop._on_event(_bash_event())
     assert loop._streak_non_reviewed == 0
     assert len(loop.reviewer.calls) == 1
     assert loop.reviewer.calls[0]["method"] == "review_action", \
@@ -130,13 +135,13 @@ def test_side_effecting_tool_resets_streak():
 
     # Another 3 reads — still not enough; no NEW self-check
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED - 1):
-        loop._on_event(_read_event())
+        await loop._on_event(_read_event())
     assert len(loop.reviewer.calls) == 1, "streak shouldn't have re-fired"
     assert loop._self_check_count == 0
     print("  ✓ Bash reset streak; 3+3 reads did NOT fire a self-check")
 
 
-def test_self_check_budget_caps():
+async def test_self_check_budget_caps():
     print("\n--- Test 3: self-check count caps at MAX_SELF_CHECKS_PER_LOOP ---")
     loop = _make_loop()
 
@@ -144,7 +149,7 @@ def test_self_check_budget_caps():
     streaks = MAX_SELF_CHECKS_PER_LOOP + 2
     for _ in range(streaks):
         for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED):
-            loop._on_event(_read_event())
+            await loop._on_event(_read_event())
 
     assert loop._self_check_count == MAX_SELF_CHECKS_PER_LOOP, \
         f"expected cap at {MAX_SELF_CHECKS_PER_LOOP}, got {loop._self_check_count}"
@@ -152,7 +157,7 @@ def test_self_check_budget_caps():
     print(f"  ✓ capped at {MAX_SELF_CHECKS_PER_LOOP} despite {streaks} streaks")
 
 
-def test_self_check_correct_elevates_to_midstream():
+async def test_self_check_correct_elevates_to_midstream():
     print("\n--- Test 4: self-check `correct` → B1 mid-stream coaching ---")
     loop = _make_loop(
         reviewer_decision="correct",
@@ -160,7 +165,7 @@ def test_self_check_correct_elevates_to_midstream():
     )
 
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED):
-        loop._on_event(_read_event())
+        await loop._on_event(_read_event())
 
     assert loop._mid_stream_coaching is not None, \
         "self-check `correct` must set _mid_stream_coaching"
@@ -173,7 +178,7 @@ def test_self_check_correct_elevates_to_midstream():
     print("  ✓ B1 inner-loop will now spawn a new Claude with coaching prompt")
 
 
-def test_self_check_correct_capped_falls_through_to_corrections():
+async def test_self_check_correct_capped_falls_through_to_corrections():
     print("\n--- Test 5: self-check `correct` past mid-stream cap → corrections ---")
     loop = _make_loop(
         reviewer_decision="correct",
@@ -183,7 +188,7 @@ def test_self_check_correct_capped_falls_through_to_corrections():
     loop._mid_stream_count = MAX_MID_STREAM_INTERRUPTS
 
     for _ in range(SELF_CHECK_AFTER_N_NON_REVIEWED):
-        loop._on_event(_read_event())
+        await loop._on_event(_read_event())
 
     assert loop._mid_stream_coaching is None, \
         "cap was hit — should NOT set new coaching"
@@ -193,15 +198,15 @@ def test_self_check_correct_capped_falls_through_to_corrections():
     print("  ✓ capped: no new coaching, no interrupt; correction deferred to next loop")
 
 
-def main():
+async def main():
     print("=" * 64)
     print("B4 SELF-CHECK — REGRESSION")
     print("=" * 64)
-    test_streak_triggers_one_self_check()
-    test_side_effecting_tool_resets_streak()
-    test_self_check_budget_caps()
-    test_self_check_correct_elevates_to_midstream()
-    test_self_check_correct_capped_falls_through_to_corrections()
+    await test_streak_triggers_one_self_check()
+    await test_side_effecting_tool_resets_streak()
+    await test_self_check_budget_caps()
+    await test_self_check_correct_elevates_to_midstream()
+    await test_self_check_correct_capped_falls_through_to_corrections()
     print()
     print("=" * 64)
     print("B4 SELF-CHECK TEST: PASS ✓")
@@ -209,4 +214,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

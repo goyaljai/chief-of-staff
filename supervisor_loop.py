@@ -223,7 +223,7 @@ class SupervisorLoop:
             "After your fix, run the verification step and show its output."
         )
 
-    def _run_self_check(self, last_event: ClaudeEvent) -> None:
+    async def _run_self_check(self, last_event: ClaudeEvent) -> None:
         """B4: drift check after a streak of non-side-effecting tool_uses.
 
         Runs the same Reviewer.review_action prompt the per-action gate uses,
@@ -250,11 +250,17 @@ class SupervisorLoop:
             # shoehorning a synthetic tool_name into review_action — that
             # produced malformed JSON → silent default to 'approve' →
             # B4 shipped dark.
-            review = self.reviewer.drift_check(
-                goal=self.task.goal,
-                recent_actions=_summarize_log(self.task.log, limit=30),
-                workspace=str(self.workspace),
-                inline_skill="",
+            # #83: hop onto a thread so we don't pause Claude during the
+            # drift check.
+            loop = asyncio.get_running_loop()
+            review = await loop.run_in_executor(
+                None,
+                lambda: self.reviewer.drift_check(
+                    goal=self.task.goal,
+                    recent_actions=_summarize_log(self.task.log, limit=30),
+                    workspace=str(self.workspace),
+                    inline_skill="",
+                ),
             )
         except Exception as e:
             review = {"decision": "approve", "message": f"self-check failed: {e}"}
@@ -670,7 +676,7 @@ class SupervisorLoop:
         except Exception:
             pass
 
-    def _on_event(self, event: ClaudeEvent):
+    async def _on_event(self, event: ClaudeEvent):
         if event.type == "init":
             STORE.append_log(self.task.id, {"kind": "init", "session_id": event.session_id})
             announced = (event.raw or {}).get("tools") or []
@@ -711,13 +717,21 @@ class SupervisorLoop:
                 # review below — that resets the drift streak.
                 self._streak_non_reviewed = 0
                 try:
-                    review = self.reviewer.review_action(
-                        goal=self.task.goal,
-                        tool_name=event.tool_name or "",
-                        tool_input=event.tool_input,
-                        recent_actions=_summarize_log(self.task.log, limit=20),
-                        workspace=str(self.workspace),
-                        inline_skill="",
+                    # #83: hop the synchronous Databricks call onto a
+                    # thread so this coroutine doesn't pause Claude's
+                    # stdout drain (and therefore Claude itself once the
+                    # OS pipe fills).
+                    loop = asyncio.get_running_loop()
+                    review = await loop.run_in_executor(
+                        None,
+                        lambda: self.reviewer.review_action(
+                            goal=self.task.goal,
+                            tool_name=event.tool_name or "",
+                            tool_input=event.tool_input,
+                            recent_actions=_summarize_log(self.task.log, limit=20),
+                            workspace=str(self.workspace),
+                            inline_skill="",
+                        ),
                     )
                 except Exception as e:
                     review = {"decision": "approve", "message": f"review failed: {e}"}
@@ -767,7 +781,7 @@ class SupervisorLoop:
                         and self._mid_stream_coaching is None):
                     self._streak_non_reviewed = 0
                     self._self_check_count += 1
-                    self._run_self_check(event)
+                    await self._run_self_check(event)
             return
 
         if event.type == "tool_result":

@@ -25,7 +25,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from config import ALLOWED_TOOLS
 
@@ -48,7 +48,7 @@ class ClaudeRunner:
         self,
         prompt: str,
         session_id: str | None = None,
-        on_event: Callable[[ClaudeEvent], None] | None = None,
+        on_event: Callable[[ClaudeEvent], "None | Awaitable[None]"] | None = None,
         timeout_secs: int = 1200,
     ) -> TaskResult:
         cmd = self._build_command(prompt, session_id)
@@ -112,7 +112,14 @@ class ClaudeRunner:
                     cost_usd = data["cost_usd"]
             if on_event:
                 try:
-                    on_event(event)
+                    # #83: support async on_event handlers. The supervisor's
+                    # _on_event hops reviewer LLM calls onto a thread via
+                    # run_in_executor so this drain loop isn't blocked
+                    # waiting for Databricks (which makes Claude's stdout
+                    # OS pipe fill ~64KB and Claude pauses writing).
+                    result = on_event(event)
+                    if asyncio.iscoroutine(result):
+                        await result
                 except Exception as e:
                     print(f"[runner] on_event raised: {e}")
 
