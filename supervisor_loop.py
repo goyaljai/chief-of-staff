@@ -25,6 +25,14 @@ import rag
 REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
 
 
+# B1 (mid-stream interrupt + coach): cap on per-loop mid-stream interrupts.
+# Each one costs an interrupt + new Claude subprocess + --resume round-trip.
+# 3 is enough to recover from a couple of false starts; beyond that the
+# coaching is probably wrong about what's wrong, and we should fall through
+# to the correction-loop boundary instead of ping-ponging.
+MAX_MID_STREAM_INTERRUPTS = 3
+
+
 def _is_reviewable_mcp_tool(tool_name: str) -> bool:
     """MCP tools that look like Bash/Write/Edit variants warrant per-action review."""
     if not tool_name or not tool_name.startswith("mcp__"):
@@ -171,8 +179,36 @@ class SupervisorLoop:
         self._action_count = 0
         self._review_pending: dict | None = None
         self._mcp_auth_requested: dict | None = None
+        # B1: mid-stream coaching state. _on_event sets _mid_stream_coaching
+        # when the reviewer flags a tool_use; the inner loop in run() reads
+        # it after Claude exits, builds a coaching prompt, and re-spawns
+        # with --resume <session_id>. _mid_stream_count is the per-outer-
+        # loop counter; it's reset at the top of each correction loop.
+        self._mid_stream_coaching: dict | None = None
+        self._mid_stream_count = 0
         STORE.register_runner(task.id, self.runner)
         set_usage_callback(self._on_databricks_usage)
+
+    def _build_coaching_prompt(self, coaching: dict) -> str:
+        """Render the reviewer's mid-stream `correct` decision as a
+        coaching message Claude reads on `--resume`. The flagged tool +
+        input are echoed so Claude knows EXACTLY which action to avoid
+        repeating."""
+        tool = coaching.get("tool", "?")
+        try:
+            inp = json.dumps(coaching.get("input") or {}, default=str)[:400]
+        except Exception:
+            inp = str(coaching.get("input", ""))[:400]
+        msg = (coaching.get("message") or "").strip()
+        return (
+            "Stop. The independent reviewer flagged your last action mid-stream:\n\n"
+            f"  Tool: {tool}\n"
+            f"  Input: {inp}\n\n"
+            f"Reviewer says: {msg}\n\n"
+            "Continue from where you left off, but address this issue. "
+            "Do NOT repeat the flagged approach — pick a different path. "
+            "After your fix, run the verification step and show its output."
+        )
 
     def _on_databricks_usage(self, in_tokens: int, out_tokens: int):
         STORE.add_cost(self.task.id, in_tokens=in_tokens, out_tokens=out_tokens)
@@ -371,19 +407,53 @@ class SupervisorLoop:
             STORE.set_status(self.task.id, f"executing_loop_{loop_num}")
             STORE.append_log(self.task.id, {"kind": "phase", "phase": f"loop_{loop_num}"})
 
-            try:
-                result = await self.runner.run(
-                    prompt=prompt,
-                    session_id=session_id,
-                    on_event=self._on_event,
-                )
-            except Exception as e:
-                STORE.append_log(self.task.id, {"kind": "error", "where": "claude_run", "msg": str(e)})
-                STORE.set_status(self.task.id, "failed")
-                self.task.result = {"success": False, "error": f"claude run failed: {e}"}
-                return
+            # B1: each correction loop gets its own budget of mid-stream
+            # interrupts. The inner while-loop below reuses the same
+            # loop_num as long as we're just re-spawning Claude with
+            # coaching; it falls through to final_review only when no
+            # more coaching is requested (or the cap is hit).
+            self._mid_stream_count = 0
+            self._mid_stream_coaching = None
+            inner_prompt = prompt
 
-            session_id = result.session_id
+            while True:
+                try:
+                    result = await self.runner.run(
+                        prompt=inner_prompt,
+                        session_id=session_id,
+                        on_event=self._on_event,
+                    )
+                except Exception as e:
+                    STORE.append_log(self.task.id, {"kind": "error", "where": "claude_run", "msg": str(e)})
+                    STORE.set_status(self.task.id, "failed")
+                    self.task.result = {"success": False, "error": f"claude run failed: {e}"}
+                    return
+
+                session_id = result.session_id
+
+                # B1: did the reviewer ask us to coach mid-stream?
+                if self._mid_stream_coaching:
+                    coaching = self._mid_stream_coaching
+                    self._mid_stream_coaching = None
+                    self._mid_stream_count += 1
+                    STORE.append_log(self.task.id, {
+                        "kind": "mid_stream_resumed",
+                        "loop": loop_num,
+                        "round": self._mid_stream_count,
+                        "tool": coaching.get("tool"),
+                    })
+                    inner_prompt = self._build_coaching_prompt(coaching)
+                    # Replace the runner so /cancel and shutdown drain hit
+                    # the latest live subprocess. The OLD runner has already
+                    # exited (we got here only after .run() returned).
+                    self.runner = ClaudeRunner(
+                        working_dir=self.workspace,
+                        hook_log_path=self.hook_log,
+                    )
+                    STORE.register_runner(self.task.id, self.runner)
+                    continue
+
+                break  # no mid-stream coach pending — fall through to review
 
             if result.cost_usd:
                 STORE.add_cost(self.task.id, claude_usd=float(result.cost_usd))
@@ -556,7 +626,27 @@ class SupervisorLoop:
                     STORE.set_escalation(self.task.id, parsed)
                     self.runner.interrupt()
                 elif review["decision"] == "correct":
-                    self.task.corrections.append(review["message"])
+                    # B1: try mid-stream interrupt FIRST (immediate coach via
+                    # --resume); fall back to deferred-to-next-loop only
+                    # when we've hit the cap or another coach is already
+                    # queued for this Claude exit.
+                    if (self._mid_stream_count < MAX_MID_STREAM_INTERRUPTS
+                            and self._mid_stream_coaching is None):
+                        self._mid_stream_coaching = {
+                            "tool": event.tool_name,
+                            "input": event.tool_input,
+                            "message": review["message"],
+                        }
+                        STORE.append_log(self.task.id, {
+                            "kind": "mid_stream_coach_requested",
+                            "tool": event.tool_name,
+                            "round": self._mid_stream_count + 1,
+                        })
+                        self.runner.interrupt()
+                    else:
+                        # Cap hit OR a coach is already pending — defer to
+                        # the next correction loop's prompt as before.
+                        self.task.corrections.append(review["message"])
                 elif review["decision"] == "request_evidence":
                     self.task.corrections.append(f"[evidence-needed] {review['message']}")
             return
