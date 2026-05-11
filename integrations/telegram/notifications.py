@@ -210,49 +210,102 @@ async def _send_completion(context, chat_id: int, task_id: str, state: dict):
 
 _ARTIFACT_NOISE_DIRS = ("node_modules/", "_hooks/", "dist/", ".git/", "venv/",
                         "__pycache__/", ".gradle/", ".idea/", "build/intermediates/",
-                        "Pods/", "DerivedData/")
+                        "Pods/", "DerivedData/", "gradle/wrapper/")
+
+# Build / scaffolding files that are technically at workspace root but are
+# never the user's deliverable. The user asked for an APK — they don't
+# want gradlew or .gitignore.
+_ARTIFACT_NOISE_NAMES = frozenset({
+    "gradlew", "gradlew.bat", "build.gradle", "build.gradle.kts",
+    "settings.gradle", "settings.gradle.kts", "gradle.properties",
+    "local.properties", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "bun.lockb", "Cargo.lock", "Pipfile.lock", "poetry.lock",
+    "babel.config.js", "metro.config.js", "tsconfig.json", "jsconfig.json",
+    ".gitignore", ".npmignore", ".eslintrc.js", ".prettierrc",
+    "Gemfile", "Gemfile.lock", "Podfile", "Podfile.lock",
+    "Dockerfile", "docker-compose.yml", "Makefile",
+})
+
 _TG_DOC_MAX_BYTES = 49 * 1024 * 1024  # 1MB headroom under TG's 50MB cap
 
 
 def _is_user_facing_artifact(path: str) -> bool:
-    return not any(noise in path for noise in _ARTIFACT_NOISE_DIRS)
+    if any(noise in path for noise in _ARTIFACT_NOISE_DIRS):
+        return False
+    name = path.rsplit("/", 1)[-1]
+    if name in _ARTIFACT_NOISE_NAMES:
+        return False
+    return True
 
 
 async def _send_artifacts(context, chat_id: int, state: dict):
-    """Send up to 3 user-facing deliverable artifacts as Telegram documents.
+    """Send the deliverable artifacts the user actually asked for —
+    nothing else.
 
-    Priority order:
-      1. Files whose name appears in result.summary / next_steps (the
-         orchestrator's named deliverable, e.g. 'hello-world-android.apk').
-      2. Files at workspace root (no '/' in path) — usually the deliverable
-         + README.
-      3. Other user-facing files (filtered against build-noise dirs).
+    Selection rule (strict, deliberately narrow):
+      1. If any artifact's filename appears verbatim in result.summary or
+         next_steps (the reviewer's distilled "what got produced"), send
+         ONLY those. The reviewer-named file IS the deliverable.
+      2. Else if the summary references a file extension (`.apk`, `.pdf`,
+         `.zip`, `.md`, `.csv`, …), send only artifacts at workspace root
+         matching that extension.
+      3. Else fall back to root-level user-facing files (deduplicated by
+         basename so we don't send `hello-world-debug.apk` AND its
+         build-output twin `app/build/outputs/apk/debug/app-debug.apk`).
 
-    Telegram caps each document at 50MB; we cap at 49MB. We send at most 3
-    files per task to keep the chat clean. If we skip files (oversize or
-    over the cap), we tell the user with a one-liner.
+    Hard caps: ≤3 documents per task, ≤49MB per file, drop scaffolding
+    (gradlew, package-lock, .gitignore, …) at any tier.
     """
     import os
+    import re
     workspace = state.get("workspace") or ""
     result = state.get("result") or {}
     artifacts = state.get("artifacts") or []
     if not workspace or not artifacts:
         return
 
-    summary_text = ((result.get("summary") or "") + " " + (result.get("next_steps") or "")).lower()
-    candidates = [a for a in artifacts
-                  if a.get("path") and _is_user_facing_artifact(a["path"])
-                  and 0 < (a.get("size_bytes") or 0) <= _TG_DOC_MAX_BYTES]
+    summary_text = (result.get("summary") or "") + " " + (result.get("next_steps") or "")
+    summary_lower = summary_text.lower()
 
-    def _priority(a):
-        name = (a["path"].rsplit("/", 1)[-1]).lower()
-        named_in_summary = name and name in summary_text
-        is_root = "/" not in a["path"]
-        return (0 if named_in_summary else (1 if is_root else 2),
-                -(a.get("size_bytes") or 0))
+    user_facing = [a for a in artifacts
+                   if a.get("path") and _is_user_facing_artifact(a["path"])
+                   and 0 < (a.get("size_bytes") or 0) <= _TG_DOC_MAX_BYTES]
 
-    candidates.sort(key=_priority)
-    top = candidates[:3]
+    # Tier 1: filename verbatim in summary.
+    named = [a for a in user_facing
+             if (a["path"].rsplit("/", 1)[-1]).lower() in summary_lower]
+
+    # Tier 2: extension referenced in summary, e.g. ".apk", ".pdf".
+    if not named:
+        ext_hits = re.findall(r"\.[a-z0-9]{2,5}\b", summary_lower)
+        wanted_exts = {e for e in ext_hits if e not in (".com", ".net", ".org",
+                                                        ".io", ".md")}
+        # ".md" is allowed if explicitly the deliverable, but otherwise it
+        # picks up README noise — only honour it if it's the ONLY ext.
+        if not wanted_exts and ".md" in ext_hits:
+            wanted_exts = {".md"}
+        if wanted_exts:
+            named = [a for a in user_facing
+                     if "/" not in a["path"]
+                     and any(a["path"].lower().endswith(e) for e in wanted_exts)]
+
+    # Tier 3: root-level user-facing files, deduplicated by basename.
+    if not named:
+        seen_basenames = set()
+        named = []
+        for a in user_facing:
+            if "/" in a["path"]:
+                continue
+            b = a["path"].rsplit("/", 1)[-1].lower()
+            if b in seen_basenames:
+                continue
+            seen_basenames.add(b)
+            named.append(a)
+
+    # Sort descending by size so the actual deliverable beats README on
+    # ties; cap at 3.
+    named.sort(key=lambda a: -(a.get("size_bytes") or 0))
+    top = named[:3]
 
     sent = 0
     for a in top:
@@ -272,11 +325,11 @@ async def _send_artifacts(context, chat_id: int, state: dict):
     skipped_oversize = sum(1 for a in artifacts
                            if a.get("path") and _is_user_facing_artifact(a["path"])
                            and (a.get("size_bytes") or 0) > _TG_DOC_MAX_BYTES)
-    extras = max(0, len(candidates) - sent)
+    extras = max(0, len(named) - sent)
     if sent and (extras or skipped_oversize):
         notes = []
         if extras:
-            notes.append(f"+{extras} more user-facing file(s) in workspace")
+            notes.append(f"+{extras} more deliverable file(s) in workspace")
         if skipped_oversize:
             notes.append(f"{skipped_oversize} file(s) > 50MB (Telegram limit)")
         await context.bot.send_message(chat_id, " · ".join(notes))

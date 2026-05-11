@@ -177,7 +177,23 @@ async def shutdown_hook():
 # ─── static dashboard ────────────────────────────────────────────────────
 
 if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+    # Wrap StaticFiles to send no-cache headers on every static asset.
+    # Without this, the browser caches index.html aggressively and UI
+    # changes don't land until the user does a hard-refresh — exactly
+    # the surprise we hit on the 2026-05-11 revamp. dev-served apps
+    # don't need browser caching; the assets are tiny and same-origin.
+    from starlette.responses import Response as _StarletteResponse
+
+    class _NoCacheStaticFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            if isinstance(response, _StarletteResponse):
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+            return response
+
+    app.mount("/static", _NoCacheStaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
 if __name__ == "__main__":
