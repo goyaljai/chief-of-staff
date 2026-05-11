@@ -21,8 +21,7 @@ from agents import Orchestrator, Reviewer, append_to_global, save_task_skill, se
 from persistence import STORE, TaskState
 import workflows.dag as dag_executor
 import rag
-
-REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
+from services.tool_review import classify_announced_tools, is_side_effecting
 
 
 # B1 (mid-stream interrupt + coach): cap on per-loop mid-stream interrupts.
@@ -31,14 +30,6 @@ REVIEW_TOOLS = {"Bash", "Write", "Edit", "MultiEdit"}
 # coaching is probably wrong about what's wrong, and we should fall through
 # to the correction-loop boundary instead of ping-ponging.
 MAX_MID_STREAM_INTERRUPTS = 3
-
-
-def _is_reviewable_mcp_tool(tool_name: str) -> bool:
-    """MCP tools that look like Bash/Write/Edit variants warrant per-action review."""
-    if not tool_name or not tool_name.startswith("mcp__"):
-        return False
-    low = tool_name.lower()
-    return any(k in low for k in ("bash", "shell", "exec", "run_command", "write", "edit", "create_file", "delete"))
 
 
 def _summarize_log(log: list[dict], limit: int = 80, full_text: bool = False) -> str:
@@ -577,6 +568,15 @@ class SupervisorLoop:
     def _on_event(self, event: ClaudeEvent):
         if event.type == "init":
             STORE.append_log(self.task.id, {"kind": "init", "session_id": event.session_id})
+            announced = (event.raw or {}).get("tools") or []
+            if announced:
+                review, skip = classify_announced_tools(announced)
+                STORE.append_log(self.task.id, {
+                    "kind": "tools_classified",
+                    "review_count": len(review),
+                    "review": review,
+                    "skip_count": len(skip),
+                })
             return
 
         if event.type == "text":
@@ -601,7 +601,7 @@ class SupervisorLoop:
                         "items": [{"content": t.get("content",""), "status": t.get("status","")} for t in todos],
                     })
 
-            if event.tool_name in REVIEW_TOOLS or _is_reviewable_mcp_tool(event.tool_name or ""):
+            if is_side_effecting(event.tool_name):
                 try:
                     review = self.reviewer.review_action(
                         goal=self.task.goal,
