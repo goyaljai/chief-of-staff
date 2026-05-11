@@ -1,4 +1,4 @@
-# chief-of-staff
+# Chief of Staff
 
 > A chief of staff for your AI. You delegate. It manages. You only hear back when something genuinely needs you.
 
@@ -21,7 +21,7 @@ The bottleneck isn't speed. It's the **admin tax** of being the supervisor.
 
 ## What this is
 
-`chief-of-staff` is a management layer that sits between you and Claude Code.
+**Chief of Staff** is a management layer that sits between you and Claude Code.
 
 Give it any task — code, research, writing, analysis — via **Telegram**, **web UI**, or **curl**. It asks 3-5 sharp upfront questions. Disappears. Manages Claude end-to-end. Comes back when it's done. **Only interrupts you when it genuinely needs a human decision.**
 
