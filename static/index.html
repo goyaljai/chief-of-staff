@@ -40,24 +40,41 @@
 
   <!-- DASHBOARD -->
   <section id="dashboard">
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-base font-semibold">Tasks</h2>
-      <div class="flex gap-2">
-        <button id="new-task-btn" class="bg-slate-900 text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-800">+ New task</button>
-        <button id="refresh" class="text-sm text-slate-600 hover:text-slate-900 px-3 py-1.5">↻ Refresh</button>
+    <div class="flex items-end justify-between mb-5">
+      <div>
+        <h2 class="text-xl font-bold text-slate-900 tracking-tight">Tasks</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Things you've delegated. Click any row to inspect.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="refresh" class="inline-flex items-center gap-1.5 text-sm text-slate-600 hover:text-slate-900 px-3 py-2 rounded-md hover:bg-white border border-transparent hover:border-slate-200 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M4 9a8 8 0 0114-3M20 15a8 8 0 01-14 3"/></svg>
+          Refresh
+        </button>
+        <button id="new-task-btn" class="inline-flex items-center gap-1.5 bg-slate-900 text-white px-3.5 py-2 rounded-md text-sm font-medium hover:bg-slate-800 shadow-sm transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+          New task
+        </button>
       </div>
     </div>
 
-    <div id="stats-bar" class="grid grid-cols-4 gap-3 mb-4"></div>
+    <div id="stats-bar" class="grid grid-cols-4 gap-3 mb-5"></div>
 
     <div class="flex items-center gap-2 mb-3">
       <div id="filter-chips" class="flex gap-1.5"></div>
-      <input id="task-search" type="text" placeholder="Search tasks..."
-        class="flex-1 border border-slate-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-slate-900" />
+      <div class="flex-1 relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
+        <input id="task-search" type="text" placeholder="Search tasks…"
+          class="w-full bg-white border border-slate-200 rounded-md pl-9 pr-3 py-2 text-sm placeholder-slate-400 focus:outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-100 transition" />
+      </div>
     </div>
 
-    <div id="task-list" class="bg-white border border-slate-200 rounded-lg overflow-hidden">
-      <div class="p-4 text-sm text-slate-500">Loading…</div>
+    <div id="task-list" class="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+      <div class="p-12 text-center">
+        <div class="inline-flex items-center gap-2 text-sm text-slate-500">
+          <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+          Loading tasks…
+        </div>
+      </div>
     </div>
   </section>
 
@@ -156,11 +173,36 @@ function renderStats(tasks) {
   const totalTok = tasks.reduce((s, t) => s + ((t.cost?.databricks_input_tokens||0) + (t.cost?.databricks_output_tokens||0)), 0);
   const passRate = total ? Math.round(done * 100 / total) : 0;
 
+  const failed = tasks.filter(t => statusBucket(t.status) === "failed").length;
+  const tokK = totalTok >= 1000 ? `${(totalTok/1000).toFixed(1)}K` : totalTok.toLocaleString();
   $("stats-bar").innerHTML = `
-    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Total tasks</div><div class="text-2xl font-semibold">${total}</div></div>
-    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Done</div><div class="text-2xl font-semibold text-emerald-700">${done} <span class="text-sm text-slate-500 font-normal">(${passRate}%)</span></div></div>
-    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Running / escalated</div><div class="text-2xl font-semibold text-blue-700">${running}</div></div>
-    <div class="bg-white border border-slate-200 rounded p-3"><div class="text-xs text-slate-500">Tokens used</div><div class="text-2xl font-semibold mono">${totalTok.toLocaleString()}</div></div>
+    <div class="bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition">
+      <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Total tasks</div>
+      <div class="text-2xl font-bold text-slate-900">${total}</div>
+      <div class="text-xs text-slate-400 mt-1">across all states</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-lg p-4 hover:border-emerald-300 transition relative overflow-hidden">
+      <div class="absolute inset-x-0 bottom-0 h-1 bg-emerald-500" style="width:${passRate}%"></div>
+      <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Pass rate</div>
+      <div class="flex items-baseline gap-2">
+        <div class="text-2xl font-bold text-emerald-700">${passRate}<span class="text-base font-semibold">%</span></div>
+        <div class="text-xs text-slate-500">${done} of ${total}</div>
+      </div>
+      <div class="text-xs text-slate-400 mt-1">${failed} failed</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-lg p-4 hover:border-blue-300 transition">
+      <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">In flight</div>
+      <div class="flex items-baseline gap-2">
+        <div class="text-2xl font-bold text-blue-700">${running}</div>
+        ${running > 0 ? `<span class="inline-flex items-center gap-1 text-[10px] font-medium text-blue-700"><span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>live</span>` : ""}
+      </div>
+      <div class="text-xs text-slate-400 mt-1">running or escalated</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition">
+      <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">Tokens spent</div>
+      <div class="text-2xl font-bold text-slate-900 mono">${tokK}</div>
+      <div class="text-xs text-slate-400 mt-1">Databricks total</div>
+    </div>
   `;
 }
 
@@ -172,10 +214,12 @@ function renderFilterChips(tasks) {
     failed: tasks.filter(t => statusBucket(t.status) === "failed").length,
   };
   const chips = ["all","running","done","failed"];
+  const dotCls = {all: "", running: "bg-blue-500", done: "bg-emerald-500", failed: "bg-rose-500"};
   $("filter-chips").innerHTML = chips.map(c => {
     const active = c === _filterStatus;
-    return `<button data-filter="${c}" class="px-3 py-1.5 text-xs rounded font-medium ${active ? "bg-slate-900 text-white" : "bg-white border border-slate-200 hover:bg-slate-50 text-slate-700"}">
-      ${c[0].toUpperCase()+c.slice(1)} <span class="opacity-60 ml-1">${counts[c]}</span>
+    const dot = dotCls[c] ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls[c]}"></span>` : "";
+    return `<button data-filter="${c}" class="inline-flex items-center gap-2 px-3 py-1.5 text-xs rounded-md font-medium transition ${active ? "bg-slate-900 text-white shadow-sm" : "bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700"}">
+      ${dot}${c[0].toUpperCase()+c.slice(1)} <span class="${active ? 'text-slate-300' : 'text-slate-400'} tabular-nums">${counts[c]}</span>
     </button>`;
   }).join("");
   document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => {
@@ -269,39 +313,52 @@ async function loadTasks() {
     const filtered = applyFilters(tasks);
 
     if (!filtered.length) {
-      list.innerHTML = `<div class="p-6 text-sm text-slate-500 text-center">${tasks.length ? 'No tasks match the filter.' : 'No tasks yet. Click + New task above to start.'}</div>`;
+      list.innerHTML = `
+        <div class="p-12 text-center">
+          <div class="text-slate-300 text-5xl mb-3">${tasks.length ? '🔍' : '✨'}</div>
+          <div class="text-sm font-medium text-slate-700 mb-1">${tasks.length ? 'No tasks match the filter' : 'No tasks yet'}</div>
+          <div class="text-xs text-slate-500">${tasks.length ? 'Try clearing the search or chip selection.' : 'Click + New task above to delegate something.'}</div>
+        </div>`;
       return;
     }
     list.innerHTML = `
       <table class="w-full text-sm">
-        <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider">
+        <thead class="bg-slate-50/80 text-slate-600 text-[11px] uppercase tracking-wider border-b border-slate-200">
           <tr>
-            <th class="text-left px-4 py-2">Task</th>
-            <th class="text-left px-4 py-2 w-32">Status</th>
-            <th class="text-left px-4 py-2 w-24">Duration</th>
-            <th class="text-left px-4 py-2 w-28">Tokens</th>
-            <th class="text-left px-4 py-2 w-24">Started</th>
-            <th class="text-right px-4 py-2 w-20"></th>
+            <th class="text-left px-5 py-3 font-semibold">Task</th>
+            <th class="text-left px-3 py-3 w-32 font-semibold">Status</th>
+            <th class="text-right px-3 py-3 w-20 font-semibold">Duration</th>
+            <th class="text-right px-3 py-3 w-24 font-semibold">Tokens</th>
+            <th class="text-right px-3 py-3 w-20 font-semibold">Started</th>
+            <th class="text-right px-3 py-3 w-20"></th>
           </tr>
         </thead>
         <tbody>
           ${filtered.map(t => {
             const tin = t.cost?.databricks_input_tokens || 0;
             const tout = t.cost?.databricks_output_tokens || 0;
-            const tok = (tin+tout).toLocaleString();
+            const tokN = tin+tout;
+            const tok = tokN >= 1000 ? `${(tokN/1000).toFixed(1)}K` : tokN.toLocaleString();
             const isRunning = ["pending","skilling","briefing"].includes(t.status) || t.status?.startsWith("executing") || t.status?.startsWith("reviewing");
+            const bucket = statusBucket(t.status);
+            const accent = bucket === "done" ? "before:bg-emerald-400"
+                         : bucket === "failed" ? "before:bg-rose-400"
+                         : bucket === "running" ? "before:bg-blue-400"
+                         : "before:bg-slate-200";
             return `
-            <tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer task-row" data-id="${t.id}">
-              <td class="px-4 py-3">
-                <div class="font-medium truncate max-w-lg" title="${(t.goal||'').replace(/"/g,'&quot;')}">${t.goal||'(no goal)'}</div>
-                <div class="text-xs text-slate-500 mono">${t.id}</div>
+            <tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer task-row group relative before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] ${accent} before:opacity-0 group-hover:before:opacity-100 hover:before:opacity-100" data-id="${t.id}">
+              <td class="px-5 py-3.5">
+                <div class="font-medium text-slate-900 truncate max-w-lg group-hover:text-slate-950" title="${(t.goal||'').replace(/"/g,'&quot;')}">${t.goal||'(no goal)'}</div>
+                <div class="text-[11px] text-slate-400 mono mt-0.5">${t.id}</div>
               </td>
-              <td class="px-4 py-3">${pill(t.status)}</td>
-              <td class="px-4 py-3 text-slate-600">${fmtDuration(t.duration_secs)}</td>
-              <td class="px-4 py-3 text-slate-600 mono text-xs">${tok}</td>
-              <td class="px-4 py-3 text-slate-500 text-xs">${fmtTimeAgo(t.started_at)}</td>
-              <td class="px-4 py-3 text-right">
-                ${isRunning ? `<button class="row-cancel text-xs px-2 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded" data-id="${t.id}">Cancel</button>` : ''}
+              <td class="px-3 py-3.5">${pill(t.status)}</td>
+              <td class="px-3 py-3.5 text-slate-600 text-right tabular-nums">${fmtDuration(t.duration_secs)}</td>
+              <td class="px-3 py-3.5 text-slate-600 mono text-xs text-right tabular-nums">${tok}</td>
+              <td class="px-3 py-3.5 text-slate-500 text-xs text-right">${fmtTimeAgo(t.started_at)}</td>
+              <td class="px-3 py-3.5 text-right">
+                ${isRunning
+                  ? `<button class="row-cancel text-xs px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded font-medium border border-rose-200" data-id="${t.id}">Cancel</button>`
+                  : `<span class="text-slate-300 text-base group-hover:text-slate-500 transition">→</span>`}
               </td>
             </tr>
           `;}).join("")}
