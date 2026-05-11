@@ -54,11 +54,7 @@ from routes.task_state import task_state_router
 from routes.task_stream import task_stream_router
 from routes.undo import undo_router
 
-from services.shutdown import (
-    IS_SHUTTING_DOWN,
-    drain_inflight,
-    install_signal_handlers,
-)
+from services.shutdown import IS_SHUTTING_DOWN, drain_inflight
 from services.sweeper import (
     run_workspace_sweep_once,
     supabase_rest_ping,
@@ -104,8 +100,14 @@ async def startup():
       5. supabase REST ping — light up the dashboard's request widgets
       6. start the E5 log flusher — without this, append_log degrades to
          per-event synchronous DB inserts under load
-      7. install F1 signal handlers — SIGINT/SIGTERM trigger drain_inflight
-      8. start the hourly background workspace sweeper
+      7. start the hourly background workspace sweeper
+
+    Signals are NOT hijacked — uvicorn's native SIGINT/SIGTERM handling
+    fires its shutdown sequence, which calls our @app.on_event("shutdown")
+    hook below, which calls drain_inflight(). The previous design called
+    `loop.add_signal_handler` and overwrote uvicorn's handler, leaving
+    the process stuck in 503-mode forever after drain (#70 — fixed
+    2026-05-11).
     """
     db.init_db()
     STORE.hydrate_from_db()
@@ -133,21 +135,15 @@ async def startup():
     except Exception as e:
         print(f"[main] log_flusher start failed: {e}")
 
-    try:
-        install_signal_handlers(asyncio.get_running_loop())
-    except Exception as e:
-        print(f"[main] signal handlers not installed: {e}")
-
     asyncio.create_task(workspace_sweeper_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown_hook():
-    """Belt-and-braces drain in case the signal handler didn't run (test
-    harness, lifespan-only mode). Idempotent — drain_inflight checks
-    IS_SHUTTING_DOWN and skips if already drained."""
-    if not IS_SHUTTING_DOWN():
-        await drain_inflight()
+    """uvicorn calls this on SIGINT/SIGTERM as part of its native shutdown.
+    drain_inflight() is idempotent (checks _SHUTTING_DOWN at start), so
+    if anything else has already drained the call is a no-op."""
+    await drain_inflight()
 
 
 # ─── static dashboard ────────────────────────────────────────────────────

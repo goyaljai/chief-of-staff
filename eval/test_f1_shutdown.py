@@ -50,10 +50,16 @@ async def main():
     try:
         # 2. Trigger drain
         await shutdown_mod.drain_inflight()
-        assert shutdown_mod._SHUTTING_DOWN is False, \
-            "drain_inflight should not toggle the flag itself; that's the signal handler's job"
+        # #70 fix: drain_inflight is now the OWNER of the flag — it flips
+        # _SHUTTING_DOWN=True at start, since we no longer hijack uvicorn's
+        # signal handler. Reset it before the post-drain assertions below.
+        assert shutdown_mod._SHUTTING_DOWN is True, \
+            "drain_inflight should set _SHUTTING_DOWN=True at start (#70 fix)"
+        # Idempotency: a second call should be a no-op (early return).
+        await shutdown_mod.drain_inflight()
     finally:
         dag_executor.interrupt_all_for = orig
+        shutdown_mod._SHUTTING_DOWN = False  # reset for case 5 below
 
     # 3. All 3 in-flight tasks marked interrupted; the 'done' task untouched
     assert srv.STORE.get("f1_test_0").status == "interrupted"
