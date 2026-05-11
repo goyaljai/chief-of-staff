@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![main: v1.0](https://img.shields.io/badge/main-v1.0-success.svg)](https://github.com/goyaljai/chief-of-staff/releases/tag/v1.0)
-[![develop: v2.0-phase1](https://img.shields.io/badge/develop-v2.0--phase1-orange.svg)](https://github.com/goyaljai/chief-of-staff/tree/develop)
-[![CI](https://img.shields.io/badge/ci-green-brightgreen.svg)](https://github.com/goyaljai/chief-of-staff/actions)
+[![develop: v2.0-phase2.5](https://img.shields.io/badge/develop-v2.0--phase2.5-orange.svg)](https://github.com/goyaljai/chief-of-staff/tree/develop)
+[![CI](https://github.com/goyaljai/chief-of-staff/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/goyaljai/chief-of-staff/actions/workflows/ci.yml)
 [![Eval baseline](https://img.shields.io/badge/eval--baseline-16/16-success.svg)](eval/results/baseline_v3_5.json)
 
 ---
