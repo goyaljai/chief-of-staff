@@ -268,10 +268,10 @@ Locked plan — 18 working days from `v2.0-phase1` to `v2.0`.
 | Phase | Items | Status |
 |---|---|---|
 | **Phase 1 — Foundation** | C1.5 eval 16→40 · T1 Voyage rerank · T2 Databricks embeddings | ✅ shipped (`v2.0-phase1`) |
-| **Phase 2 — Marquee feature** | B1.5 spike (claude --resume mid-stream) · B1 mid-stream interrupt + inject | ⏳ next |
-| **Phase 2.5** | B4 conditional reviewer self-check every 3-4 tool calls | ⏳ depends on B1 |
-| **Phase 3 — Self-improving** | T3 DSPy auto-optimize prompts · T4 Mem0 agent memory · T5 Promptfoo | ⏳ |
-| **Phase 4 — UX polish** | D8b dashboard live progress · D5b in-UI free-text escalation · D10 SSE auto-reconnect · F2 backup/export CLI | ⏳ |
+| **Phase 2 — Marquee feature** | B1.5 spike (claude --resume mid-stream) · B1 mid-stream interrupt + inject · B1.6 agnostic tool-review classifier | ✅ shipped |
+| **Phase 2.5** | B4 conditional reviewer self-check every 3-4 tool calls | ✅ shipped |
+| **Phase 3 — Self-improving** | T3 DSPy auto-optimize prompts · T4 Mem0 agent memory · T5 Promptfoo eval-harness in CI · G5 DSPy-mined skill templates · G7 formal env-can't-deliver escalation patterns · G8 env-audit step at task start | ⏳ next (tomorrow) |
+| **Phase 4 — UX polish** | D8b dashboard live progress (DAG accordion) · D5b in-UI free-text escalation · D10 SSE auto-reconnect · F2 backup/export CLI · G6 task-template picker in New-task modal · workspace-TTL cleanup | ⏳ |
 | **Phase 5 — Observability** | E1 JSON logs · E2 Prometheus `/metrics` · E6 LangSmith trace test in CI | ⏳ |
 | **Phase 6 — Shareable** | README + Loom demo · CONTRIBUTING.md · optional Modal deploy | ⏳ |
 
