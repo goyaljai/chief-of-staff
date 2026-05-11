@@ -458,7 +458,7 @@ class SupervisorLoop:
             combined = f"{full_log}\n\nDAG result: {dag_result}\n\n=== Workspace artifacts ===\n{artifacts}"
             review = self.reviewer.final_review(goal=self.task.goal, action_log=combined, workspace=str(self.workspace))
             STORE.append_log(self.task.id, {"kind": "final_review", "passed": review["passed"], "issues": review["issues"], "summary": review["summary"]})
-            if review["passed"]:
+            if review["passed"] and not self.task.user_notes:
                 STORE.set_status(self.task.id, "done")
                 self._write_learning(1, review)
                 self._index_in_rag(review)
@@ -473,6 +473,26 @@ class SupervisorLoop:
                     "workspace": str(self.workspace),
                 }
                 return
+            elif review["passed"]:
+                # DAG passed BUT the user added notes mid-flight (e.g. "make
+                # it orange" while the build was running). The DAG's
+                # executor never saw those notes — they arrived after the
+                # dispatcher split work. If we declare done now, the notes
+                # are silently dropped. Force a correction loop so the
+                # sequential executor can apply them.
+                notes_preview = "; ".join(f'"{n[:80]}"' for n in self.task.user_notes[:3])
+                self.task.corrections.append(
+                    f"The DAG output passed verification but the user added "
+                    f"{len(self.task.user_notes)} note(s) during execution that "
+                    f"still need to be applied to the deliverable: {notes_preview}. "
+                    f"Update the existing artifacts in place to incorporate them, "
+                    f"verify the result still works, and surface the proof."
+                )
+                STORE.append_log(self.task.id, {
+                    "kind": "dag_passed_but_notes_pending",
+                    "notes": list(self.task.user_notes),
+                    "action": "forcing_correction_loop_to_apply_notes",
+                })
             else:
                 # DAG failed review — fall through to normal correction loops
                 self.task.corrections.extend(review["issues"])

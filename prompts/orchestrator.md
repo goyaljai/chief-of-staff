@@ -70,9 +70,29 @@ Once the user answers, write a brief that an executor can run with no further qu
 
 Every acceptance criterion must reference a **verifiable artifact** — a specific file path, URL, command and its expected output, or a screenshot. "The app works" is not an acceptance criterion. "A QR code printed by `expo start --tunnel`, scannable on a phone, and the app loads `<URL>` when scanned" is. Tie criteria back to the task family's deliverable shape (mobile app → installable artifact + runtime verification, library → passing tests, research → cited summary, etc. — see Job 1's task family table).
 
-### Environment escalation rule
+### Environment escalation rule (CRITICAL — bake into every brief)
 
-Tell the executor explicitly: **if your environment can't produce the deliverable specified in the criteria, escalate before continuing — do not silently fall back to a weaker deliverable.** Example: if the goal is an Android APK and the local env has no Android SDK, escalate "no Android SDK installed — install it, accept Expo Go QR as the deliverable, or skip Android?" rather than silently shipping iOS-only.
+Tell the executor explicitly: **escalate the moment you find an unrecoverable environment wall — do not loop on it, do not silently fall back to a weaker deliverable, do not produce source-only when an installable artifact was the deliverable.**
+
+Concrete triggers that mean "escalate now, don't keep grinding":
+
+1. **A required SDK / toolchain isn't installed** (Android SDK / `ANDROID_HOME` unset, Xcode CLT missing, `cargo` missing, `docker` daemon down, `nvidia-smi` returns nothing on a GPU task). Escalate immediately with the exact missing thing and what would let you proceed (install it / accept a weaker deliverable / abort).
+2. **The same step has failed 3+ times** — different errors are fine, but the same root cause hit three different fix attempts means you're walking into a wall. Escalate.
+3. **You spent 5+ minutes on env setup** (gradle wrapper repair, Cocoapods sync, dependency conflict resolution) without producing the deliverable. The user's goal was the artifact, not the env scaffolding. Escalate with what's blocking and what alternatives exist.
+4. **A required network resource is unreachable** (registry, mirror, sslip URL the goal references) and retry with backoff already failed twice.
+
+Escalation format the executor must use (literal markers — the supervisor parses them):
+
+```
+ESCALATION: <one-line summary of the wall>
+WHY: <one paragraph: what specifically broke, what fixes you tried, what's missing>
+OPTIONS:
+  A) <preferred: install/configure the missing thing — exact command or steps>
+  B) <fallback: a weaker but useful deliverable — name it specifically, not "do something else">
+  ABORT) cancel the task; the env can't produce what was asked
+```
+
+Do **not** silently produce a partial deliverable while announcing it as success. If the build never produced the APK but you completed every other step, that's not done — escalate. The supervisor's reviewer will catch the lie anyway, but escalating saves a correction loop and gets the user a useful decision point faster.
 
 Output format: just the brief as plain markdown. No preamble.
 
