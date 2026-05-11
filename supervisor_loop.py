@@ -31,6 +31,21 @@ from services.tool_review import classify_announced_tools, is_side_effecting
 # to the correction-loop boundary instead of ping-ponging.
 MAX_MID_STREAM_INTERRUPTS = 3
 
+# B4 (conditional reviewer self-check): on read-heavy tasks (lots of Read /
+# Grep / WebFetch with no Write/Edit/Bash), the per-action gate from B1
+# never fires — Claude can drift for many tool calls without any reviewer
+# pass. After this many CONSECUTIVE non-side-effecting tool_uses, we run a
+# lightweight reviewer pass over the recent log. The streak resets every
+# time a side-effecting tool fires (since that already triggers per-action
+# review).
+SELF_CHECK_AFTER_N_NON_REVIEWED = 4
+
+# Bound the cost of self-checks per outer correction loop. Each pass is
+# one Reviewer LLM call (~512 output tokens). 4 passes/loop ≈ 2K tokens —
+# cheap insurance against silent drift, but capped so a 200-tool-call task
+# doesn't run 50 reviewer calls.
+MAX_SELF_CHECKS_PER_LOOP = 4
+
 
 def _summarize_log(log: list[dict], limit: int = 80, full_text: bool = False) -> str:
     """Build a summary of recent log entries. When full_text=True, do NOT truncate
@@ -177,6 +192,13 @@ class SupervisorLoop:
         # loop counter; it's reset at the top of each correction loop.
         self._mid_stream_coaching: dict | None = None
         self._mid_stream_count = 0
+        # B4: drift-detection state. _streak_non_reviewed counts consecutive
+        # non-side-effecting tool_uses since the last reviewer pass; when it
+        # crosses SELF_CHECK_AFTER_N_NON_REVIEWED we run a self-check.
+        # _self_check_count is the per-outer-loop budget — reset alongside
+        # _mid_stream_count at the top of each correction iteration.
+        self._streak_non_reviewed = 0
+        self._self_check_count = 0
         STORE.register_runner(task.id, self.runner)
         set_usage_callback(self._on_databricks_usage)
 
@@ -200,6 +222,77 @@ class SupervisorLoop:
             "Do NOT repeat the flagged approach — pick a different path. "
             "After your fix, run the verification step and show its output."
         )
+
+    def _run_self_check(self, last_event: ClaudeEvent) -> None:
+        """B4: drift check after a streak of non-side-effecting tool_uses.
+
+        Runs the same Reviewer.review_action prompt the per-action gate uses,
+        but with a synthetic tool name ``(self_check)`` so the reviewer sees
+        this is a periodic trajectory audit rather than a specific action
+        veto. Recent log is the actual signal — what did Claude actually do
+        for the last N tool_uses?
+
+        Elevation paths reuse B1's mid-stream plumbing:
+
+          - ``escalate``  → set_escalation + runner.interrupt (mirrors B1)
+          - ``correct``   → set _mid_stream_coaching + runner.interrupt; the
+                            inner loop in run() will spawn a new Claude with
+                            a coaching prompt that includes the reviewer's
+                            message (same path B1 uses for tool flags)
+          - ``approve``   → log only, keep going
+          - ``request_evidence`` → append to corrections (deferred path)
+
+        Failures are non-fatal — a drift-check is opportunistic, not load-
+        bearing. If the Reviewer LLM 500s, log it and move on.
+        """
+        try:
+            review = self.reviewer.review_action(
+                goal=self.task.goal,
+                tool_name="(self_check)",
+                tool_input={
+                    "trigger": "drift_check",
+                    "streak_of_non_reviewed_tools": SELF_CHECK_AFTER_N_NON_REVIEWED,
+                    "last_tool": last_event.tool_name,
+                },
+                recent_actions=_summarize_log(self.task.log, limit=30),
+                workspace=str(self.workspace),
+                inline_skill="",
+            )
+        except Exception as e:
+            review = {"decision": "approve", "message": f"self-check failed: {e}"}
+
+        STORE.append_log(self.task.id, {
+            "kind": "reviewer_self_check",
+            "round": self._self_check_count,
+            "decision": review["decision"],
+            "message": review["message"],
+        })
+
+        if review["decision"] == "escalate":
+            parsed = _parse_escalation(review["message"])
+            STORE.set_escalation(self.task.id, parsed)
+            self.runner.interrupt()
+        elif review["decision"] == "correct":
+            if (self._mid_stream_count < MAX_MID_STREAM_INTERRUPTS
+                    and self._mid_stream_coaching is None):
+                self._mid_stream_coaching = {
+                    "tool": "(self_check)",
+                    "input": {"trigger": "drift_check"},
+                    "message": review["message"],
+                }
+                STORE.append_log(self.task.id, {
+                    "kind": "mid_stream_coach_requested",
+                    "tool": "(self_check)",
+                    "round": self._mid_stream_count + 1,
+                    "via": "self_check",
+                })
+                self.runner.interrupt()
+            else:
+                # Mid-stream cap hit OR coaching already pending — fall
+                # through to the next correction loop with the message.
+                self.task.corrections.append(review["message"])
+        elif review["decision"] == "request_evidence":
+            self.task.corrections.append(f"[evidence-needed] {review['message']}")
 
     def _on_databricks_usage(self, in_tokens: int, out_tokens: int):
         STORE.add_cost(self.task.id, in_tokens=in_tokens, out_tokens=out_tokens)
@@ -405,6 +498,9 @@ class SupervisorLoop:
             # more coaching is requested (or the cap is hit).
             self._mid_stream_count = 0
             self._mid_stream_coaching = None
+            # B4: reset drift state per correction loop too.
+            self._streak_non_reviewed = 0
+            self._self_check_count = 0
             inner_prompt = prompt
 
             while True:
@@ -602,6 +698,9 @@ class SupervisorLoop:
                     })
 
             if is_side_effecting(event.tool_name):
+                # B4: any side-effecting tool already triggers per-action
+                # review below — that resets the drift streak.
+                self._streak_non_reviewed = 0
                 try:
                     review = self.reviewer.review_action(
                         goal=self.task.goal,
@@ -649,6 +748,17 @@ class SupervisorLoop:
                         self.task.corrections.append(review["message"])
                 elif review["decision"] == "request_evidence":
                     self.task.corrections.append(f"[evidence-needed] {review['message']}")
+            else:
+                # B4: drift check. The current tool isn't side-effecting,
+                # so the per-action gate didn't fire. Track the streak;
+                # once it hits the threshold, run a self-check pass.
+                self._streak_non_reviewed += 1
+                if (self._streak_non_reviewed >= SELF_CHECK_AFTER_N_NON_REVIEWED
+                        and self._self_check_count < MAX_SELF_CHECKS_PER_LOOP
+                        and self._mid_stream_coaching is None):
+                    self._streak_non_reviewed = 0
+                    self._self_check_count += 1
+                    self._run_self_check(event)
             return
 
         if event.type == "tool_result":
