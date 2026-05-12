@@ -292,10 +292,18 @@ class TaskStore:
 
     def add_cost(self, tid: str, in_tokens: int = 0, out_tokens: int = 0, claude_usd: float = 0.0) -> bool:
         """Increment per-task cost counters. Returns True normally;
-        returns False when the task has crossed the runaway-cost cap
+        returns False when the task has crossed any runaway-cost cap
         (PHK3) so the supervisor can hard-stop instead of grinding to
-        infinity. Cap is read from ``COS_MAX_TASK_USD`` (default 25.0).
-        Set to 0 to disable the guardrail."""
+        infinity. Caps:
+
+          - ``COS_MAX_TASK_USD`` (default 25.0) — Claude executor spend in $
+          - ``COS_MAX_TASK_DBX_TOKENS`` (default 5,000,000) — orchestrator/
+            reviewer Databricks tokens (audit 5-r bug fix: PHK3 used to
+            cap only the Claude path, so a runaway orchestrator could
+            still burn unbounded Databricks spend)
+
+        Set either to 0 to disable that cap. Both apply independently.
+        """
         s = self._tasks.get(tid)
         if not s:
             return True
@@ -303,10 +311,17 @@ class TaskStore:
         s.cost_databricks_out += out_tokens
         s.cost_claude_usd += claude_usd
         try:
-            cap = float(os.environ.get("COS_MAX_TASK_USD", "25.0") or "25.0")
+            usd_cap = float(os.environ.get("COS_MAX_TASK_USD", "25.0") or "25.0")
         except ValueError:
-            cap = 25.0
-        if cap > 0 and s.cost_claude_usd >= cap:
+            usd_cap = 25.0
+        try:
+            dbx_cap = int(os.environ.get("COS_MAX_TASK_DBX_TOKENS", "5000000") or "5000000")
+        except ValueError:
+            dbx_cap = 5_000_000
+        if usd_cap > 0 and s.cost_claude_usd >= usd_cap:
+            return False
+        total_dbx = s.cost_databricks_in + s.cost_databricks_out
+        if dbx_cap > 0 and total_dbx >= dbx_cap:
             return False
         return True
 

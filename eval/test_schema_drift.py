@@ -171,15 +171,27 @@ def _diff_block(label: str, missing: set[str], extra: set[str]) -> str | None:
     return "\n".join(parts)
 
 
+def _auto_managed_db_columns(db_cols: set[str]) -> set[str]:
+    """Columns that exist on `tasks` but are managed outside the
+    TaskState/upsert/hydration triangle — embeddings denormalized
+    from langchain_pg_embedding, future generated/computed columns.
+
+    Audit 5-r bug fix: pre-fix, `_DB_ONLY = {"summary_embedding",
+    "skill_embedding"}` was hardcoded. A future migration adding a
+    new embedding column would falsely trigger drift. Auto-detect
+    by suffix instead so the gate keeps passing as embeddings evolve.
+    """
+    return {c for c in db_cols if c.endswith("_embedding") or c.endswith("_vector")}
+
+
 def main() -> int:
     ts_fields = _taskstate_fields()
     db_cols = _tasks_columns_from_db()
     upsert_cols = _upsert_columns_from_source()
     hydration_kwargs = _hydration_kwargs_from_source()
 
-    # auto-managed columns we don't expect on TaskState
-    _DB_ONLY = {"summary_embedding", "skill_embedding"}
-    db_persisted = db_cols - _DB_ONLY
+    db_only = _auto_managed_db_columns(db_cols)
+    db_persisted = db_cols - db_only
 
     print(f"[drift] TaskState fields (persistable): {len(ts_fields)}")
     print(f"[drift] tasks columns:                  {len(db_cols)} ({len(db_persisted)} excl. embeddings)")

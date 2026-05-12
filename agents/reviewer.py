@@ -64,7 +64,11 @@ def _is_fast_path_action(tool_name: str, tool_input: dict | None) -> bool:
         # Refuse to short-circuit if the command pipes / chains / uses
         # subshells — those can hide arbitrary commands. The LLM gets
         # a chance to weigh in on those.
-        for badch in ("|", "&&", "||", ";", "`", "$("):
+        # Audit 5-r bug fix: also reject `$VAR` and `${VAR}` env-var
+        # expansion — a fast-path-approved `pytest $TARGET` could
+        # resolve to something arbitrary at runtime that the LLM
+        # advisory would have caught.
+        for badch in ("|", "&&", "||", ";", "`", "$(", "${", "$"):
             if badch in cmd:
                 return False
         for pref in _REVIEW_FAST_PATH_BASH_PREFIXES:

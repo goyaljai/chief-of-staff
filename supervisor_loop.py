@@ -124,10 +124,18 @@ def _parse_brief_deliverables(brief: str) -> list[str]:
     in_section = False
     paths: list[str] = []
     seen: set[str] = set()
+    # Bug fix (audit 5-r): accept all common spellings of the heading —
+    # "Deliverable", "Deliverables", "Deliverable files", "Deliverable
+    # file(s)", "Deliverable Files", optional trailing colon. The
+    # orchestrator brief template currently uses "Deliverable file(s)"
+    # but a small wording change shouldn't silently disable parsing.
+    heading_re = re.compile(
+        r"^#{1,6}\s*Deliverable(?:s|\s+files?(?:\(s\))?)?\s*:?\s*$",
+        re.IGNORECASE,
+    )
     for line in lines:
         stripped = line.strip()
-        if re.match(r"^#{1,6}\s*Deliverable(\s+file)?(\(s\))?\s*:?\s*$",
-                    stripped, re.IGNORECASE):
+        if heading_re.match(stripped):
             in_section = True
             continue
         if not in_section:
@@ -190,9 +198,20 @@ def _parse_executor_deliverable_marker(task_log: list[dict]) -> list[str]:
         if not m:
             continue
         raw = m.group(1).strip()
-        # Strip surrounding markdown / quotes / brackets.
-        raw = raw.strip("`").strip("[]").strip()
-        parts = [p.strip().strip("`").strip("'\"") for p in raw.split(",")]
+        # Audit 5-r bug fix: prefer backtick-delimited extraction when
+        # Claude wraps each path in `backticks` (the brief template
+        # encourages this) — that tolerates paths with embedded
+        # spaces. Fall back to comma split for the unwrapped case.
+        # Note: filenames with embedded commas are rare enough that we
+        # don't try to handle them in the comma path; clean filenames
+        # are the norm and the brief template recommends backticks.
+        backtick_parts = re.findall(r"`([^`]+)`", raw)
+        if backtick_parts:
+            parts = backtick_parts
+        else:
+            raw_clean = raw.strip("[]").strip()
+            parts = [p.strip() for p in raw_clean.split(",")]
+        parts = [p.strip().strip("`").strip("'\"") for p in parts]
         out: list[str] = []
         seen: set[str] = set()
         for p in parts:
@@ -677,7 +696,22 @@ class SupervisorLoop:
             self.task.corrections.append(f"[evidence-needed] {review['message']}")
 
     def _on_databricks_usage(self, in_tokens: int, out_tokens: int):
-        STORE.add_cost(self.task.id, in_tokens=in_tokens, out_tokens=out_tokens)
+        # Audit 5-r bug fix (PHK3 hardening): also halt the task when
+        # the Databricks token cap is breached. add_cost returns False
+        # on either cap; we already enforce the Claude USD cap at the
+        # claude_runner cost-write site below. This adds parity for
+        # the orchestrator/reviewer LLM call path.
+        if not STORE.add_cost(self.task.id, in_tokens=in_tokens, out_tokens=out_tokens):
+            STORE.append_log(self.task.id, {
+                "kind": "runaway_cost_stop",
+                "reason": "databricks_tokens",
+                "in_tokens": self.task.cost_databricks_in,
+                "out_tokens": self.task.cost_databricks_out,
+            })
+            try:
+                self.runner.interrupt()
+            except Exception:
+                pass
 
     def _should_nudge(self) -> bool:
         """Trigger a manager nudge only when: (a) >20 actions logged without a verification op,
