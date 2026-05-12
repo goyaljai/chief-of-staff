@@ -8,8 +8,17 @@ from pydantic import BaseModel
 
 
 class TaskQuestionsRequest(BaseModel):
-    """POST /task/questions — produce 3-5 sharp clarifying questions."""
+    """POST /task/questions — adaptive (G9 — 2026-05-12).
+
+    Pass `clarifications` empty on first call to get the initial question
+    + skill_preview. After the user answers, call again with prior
+    clarifications to get the next question. Server returns
+    {questions: [next], done: false} until satisfied, then {questions:
+    [], done: true}. Backwards-compatible response shape — old clients
+    that read .questions still work, they'll just see one Q at a time.
+    """
     task: str
+    clarifications: dict[str, str] | None = None
 
 
 class TaskRunRequest(BaseModel):

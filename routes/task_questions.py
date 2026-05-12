@@ -19,11 +19,24 @@ task_questions_router = APIRouter(tags=["task"])
 
 @task_questions_router.post("/task/questions")
 def questions(req: TaskQuestionsRequest):
-    out = orchestrator_singleton.think_and_ask(req.task)
-    stash_preview(req.task, out["skill_preview"])
+    """G9 adaptive — pass clarifications={} on first call, prior answers
+    on subsequent calls. Returns one question at a time until done=true."""
+    answers = req.clarifications or {}
+    out = orchestrator_singleton.think_and_ask(req.task, answers_so_far=answers)
+    # Stash the skill_preview only on the first call (when we generated
+    # it). Follow-up calls return empty preview, so we don't overwrite.
+    if out.get("skill_preview"):
+        stash_preview(req.task, out["skill_preview"])
+    next_hint = (
+        "All clarifications gathered. Send POST /task/run with {task, clarifications} to start."
+        if out["done"]
+        else "Append the user's answer to clarifications and POST /task/questions again to get the next."
+    )
     return {
         "task": req.task,
         "questions": out["questions"],
+        "done": out["done"],
+        "asked_count": out["asked_count"],
         "skill_preview": out["skill_preview"],
-        "next": "Send POST /task/run with {task, clarifications: {q1: a1, ...}} to start.",
+        "next": next_hint,
     }

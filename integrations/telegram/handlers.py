@@ -146,11 +146,12 @@ async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
     await update.message.reply_text("🤔 Thinking about clarifying questions...")
 
+    # G9 adaptive: ask one Q at a time, condition next on prior answers.
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 f"{SUPERVISOR_API_BASE_URL}/task/questions",
-                json={"task": task},
+                json={"task": task, "clarifications": {}},
                 timeout=120,
             )
             r.raise_for_status()
@@ -159,47 +160,82 @@ async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error reaching the orchestrator: {e}")
         return ConversationHandler.END
 
-    questions = data.get("questions") or []
-    if not questions:
+    if data.get("done"):
         await update.message.reply_text("✅ No clarifying questions needed. Starting task...")
         await _launch(update, context, task, {})
         return ConversationHandler.END
 
-    context.chat_data["questions"] = questions
+    questions = data.get("questions") or []
+    if not questions:
+        # Defensive: no Q but not marked done — treat as done.
+        await update.message.reply_text("✅ Starting task...")
+        await _launch(update, context, task, {})
+        return ConversationHandler.END
+
+    # Initialize G9 state. Unlike before, we DON'T pre-fetch a question
+    # list — each answer triggers the next /task/questions call which
+    # decides the next Q (or 'done').
     context.chat_data["answers"] = {}
-    context.chat_data["q_index"] = 0
+    context.chat_data["pending_question"] = questions[0]
 
     await update.message.reply_text(
-        f"📋 I have {len(questions)} question(s).\n\n*Q1:* {questions[0]}",
+        f"📋 *Q1:* {questions[0]}",
         parse_mode="Markdown",
     )
     return ASKING
 
 
 async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """G9 adaptive: record answer, fetch next question (or done) by
+    POSTing all prior answers back to /task/questions. The orchestrator
+    decides per-call whether another question is worth asking."""
     if not _whitelisted(update):
         await _deny(update)
         return ConversationHandler.END
 
     answer = update.message.text.strip()
-    questions = context.chat_data.get("questions", [])
+    pending_q = context.chat_data.get("pending_question")
     answers = context.chat_data.get("answers", {})
-    idx = context.chat_data.get("q_index", 0)
+    task = context.chat_data.get("task_text", "")
 
-    if idx >= len(questions):
+    if not pending_q or not task:
         return ConversationHandler.END
 
-    answers[questions[idx]] = answer
-    idx += 1
-
-    if idx >= len(questions):
-        await _launch(update, context, context.chat_data["task_text"], answers)
-        return ConversationHandler.END
-
+    answers[pending_q] = answer
     context.chat_data["answers"] = answers
-    context.chat_data["q_index"] = idx
+
+    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{SUPERVISOR_API_BASE_URL}/task/questions",
+                json={"task": task, "clarifications": answers},
+                timeout=120,
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Couldn't fetch next question ({e}). Starting with what I have."
+        )
+        await _launch(update, context, task, answers)
+        return ConversationHandler.END
+
+    if data.get("done"):
+        await _launch(update, context, task, answers)
+        return ConversationHandler.END
+
+    next_qs = data.get("questions") or []
+    if not next_qs:
+        await _launch(update, context, task, answers)
+        return ConversationHandler.END
+
+    next_q = next_qs[0]
+    context.chat_data["pending_question"] = next_q
+    qnum = len(answers) + 1
     await update.message.reply_text(
-        f"*Q{idx + 1}:* {questions[idx]}",
+        f"*Q{qnum}:* {next_q}",
         parse_mode="Markdown",
     )
     return ASKING
@@ -229,8 +265,9 @@ async def _launch(update: Update, context: ContextTypes.DEFAULT_TYPE, task: str,
     # new task when the active one is in a terminal status (or absent).
     context.chat_data["task_id"] = task_id
     # Clear the ASKING-flow scratch state so it doesn't leak into the
-    # next conversation.
-    for k in ("questions", "answers", "q_index", "task_text"):
+    # next conversation. Includes G9's `pending_question` (replaces the
+    # old `questions`/`q_index` pair).
+    for k in ("questions", "answers", "q_index", "task_text", "pending_question"):
         context.chat_data.pop(k, None)
 
     await context.bot.send_message(

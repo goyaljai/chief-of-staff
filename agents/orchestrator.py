@@ -48,32 +48,111 @@ class Orchestrator:
     def __init__(self):
         self.system = _load_prompt("orchestrator")
 
-    def think_and_ask(self, task: str) -> dict:
-        """Phase 1 — meta-think + ask clarifying questions in one LLM
-        call. Returns {'skill_preview': str, 'questions': [str]}."""
+    def think_and_ask(self, task: str, answers_so_far: dict | None = None,
+                      max_questions: int = 5) -> dict:
+        """G9 — adaptive questioning.
+
+        Returns the SINGLE next-most-useful question, conditioned on the
+        goal + whatever the user has already answered. Stops when the
+        orchestrator decides nothing meaningful is left to ask.
+
+        Returns dict with shape::
+
+          {
+            "skill_preview": str,   # populated only on first call (empty answers)
+            "questions": list[str], # ≤1 element; [] when done
+            "done": bool,           # True iff no more questions needed
+            "asked_count": int,     # how many Qs already answered (echo)
+          }
+
+        Why iterative: the previous one-shot generator produced redundant
+        questions like 'native or framework?' AND 'Android only? debug
+        APK?' on the same prompt — the second was already implied by the
+        first. With per-step generation conditioned on prior answers, the
+        orchestrator can drop redundant follow-ups before asking them.
+
+        max_questions caps total Qs across all rounds (defense vs the
+        LLM looping). 5 was the prior implicit cap.
+        """
         skills = _load_skills()
-        user = (
-            "Phase 1 — meta-think + clarify.\n\n"
-            f"User's task:\n{task}\n\n"
+        answers = answers_so_far or {}
+        asked_count = len(answers)
+        is_first_call = asked_count == 0
+
+        if asked_count >= max_questions:
+            # Hard cap reached — never keep asking forever.
+            return {"skill_preview": "", "questions": [], "done": True,
+                    "asked_count": asked_count}
+
+        # Render prior Q&A so the LLM can condition on it.
+        if answers:
+            prior_qa = "\n".join(
+                f"  Q: {q}\n  A: {a}" for q, a in answers.items()
+            )
+            qa_block = f"\nAlready asked & answered ({asked_count}):\n{prior_qa}\n"
+        else:
+            qa_block = ""
+
+        meta_block = (
             "Step A: think about what this task actually requires. Identify:\n"
             "  - the kind of work (code build, research, writing, data, ops, etc.)\n"
             "  - the likely 'done' criteria\n"
             "  - failure patterns specific to THIS kind of task\n"
             "  - what verification will prove the goal was met\n"
             "  - gotchas and edge cases\n\n"
-            "Step B: propose 3-5 clarifying questions that GROUND the LLM's understanding of the user's intent. "
-            "Even when you think you can decide an answer yourself, ask anyway — questions force the user to commit to specifics, "
-            "which reduces hallucination and drift during execution. Aim for 3-5 questions, not 1-2.\n\n"
+        ) if is_first_call else ""
+
+        # Note: skill_preview is only meaningful on the first call (it
+        # captures the meta-thinking once). Follow-up calls return
+        # empty skill_preview to save tokens.
+        user = (
+            "Phase 1 — meta-think + clarify (adaptive, one question at a time).\n\n"
+            f"User's task:\n{task}\n"
+            f"{qa_block}"
+            "\n"
+            f"{meta_block}"
+            "Step B: decide whether ONE more clarifying question would meaningfully change "
+            "how the work gets done.\n\n"
+            "Rules for asking:\n"
+            "  - Each question must be INDEPENDENT of prior answers — do not ask a question "
+            "whose answer is already implied by the goal + prior answers.\n"
+            "  - Skip the question if the answer is obvious from defaults, derivable from prior "
+            "answers, or the user clearly doesn't care.\n"
+            "  - If you've already asked 3 questions and none of them was 'what should done "
+            "look like', ask that next.\n"
+            f"  - Hard cap: at most {max_questions} questions total across all rounds. "
+            f"Already asked: {asked_count}.\n\n"
             "Output JSON exactly:\n"
-            '{"skill_preview": "<concise markdown summary of your meta-thinking — what this task needs>", '
-            '"questions": ["...", "..."]}\n'
-            "Keep skill_preview under 1200 chars. Questions: 0-5 items, fewer is better."
+            "{\n"
+            '  "skill_preview": "<concise markdown summary of your meta-thinking — only populate on the first call (when no prior answers)>",\n'
+            '  "question": "<the SINGLE next question, or null if no more questions are needed>",\n'
+            '  "done": true|false\n'
+            "}\n"
+            "Set done=true ONLY when no further question would meaningfully refine the brief. "
+            "When done=true, question must be null."
         )
-        raw = _chat(self.system, user, max_tokens=2048, skills_context=skills)
+        raw = _chat(self.system, user, max_tokens=1024 if not is_first_call else 2048,
+                    skills_context=skills)
         data = _extract_json(raw)
+
+        question = (data.get("question") or "").strip()
+        done = bool(data.get("done", False))
+        skill_preview = (data.get("skill_preview") or "").strip() if is_first_call else ""
+
+        # Self-consistency: if done is true, drop any question; if a
+        # question came back without explicit done, treat it as not-done.
+        if done:
+            question = ""
+        questions = [question] if question else []
+        if not question and not done:
+            # LLM gave neither — treat as done to avoid a loop.
+            done = True
+
         return {
-            "skill_preview": (data.get("skill_preview") or "").strip(),
-            "questions": (data.get("questions") or [])[:5],
+            "skill_preview": skill_preview,
+            "questions": questions,
+            "done": done,
+            "asked_count": asked_count,
         }
 
     def generate_skill_brief(

@@ -401,46 +401,77 @@ function openNewTaskModal() {
 async function askQuestionsForNewTask() {
   const task = $("new-task-goal").value.trim();
   if (!task) return;
-  $("modal-body").innerHTML = `<div class="text-sm text-slate-500">🤔 Thinking about clarifying questions...</div>`;
+  // G9: iterative — ask one question at a time, condition next on prior
+  // answers. Server returns done=true when no more Qs are needed.
+  await _runAdaptiveQuestionFlow(task, {});
+}
+
+async function _fetchNextQuestion(task, answers) {
+  const r = await fetch(`${API}/task/questions`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({task, clarifications: answers}),
+  });
+  return await r.json();
+}
+
+async function _runAdaptiveQuestionFlow(task, answers) {
+  $("modal-body").innerHTML = `<div class="flex items-center gap-2 text-sm text-slate-500"><svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>Thinking…</div>`;
+
+  let data;
   try {
-    const r = await fetch(`${API}/task/questions`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({task}),
-    });
-    const data = await r.json();
-    const qs = data.questions || [];
-    if (!qs.length) {
-      submitNewTask(task, {});
-      return;
-    }
-    $("modal-body").innerHTML = `
-      <div>
-        <div class="text-sm text-slate-600 mb-3">Task: <span class="font-medium">${task}</span></div>
-        <div class="space-y-3 max-h-96 overflow-y-auto">
-          ${qs.map((q,i) => `
-            <div>
-              <label class="text-sm font-medium block mb-1">Q${i+1}: ${q}</label>
-              <input data-q="${q.replace(/"/g,'&quot;')}" type="text" class="answer-input w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-slate-900" />
-            </div>
-          `).join("")}
-        </div>
-        <div class="flex gap-2 mt-4 justify-end">
-          <button id="modal-cancel" class="text-sm px-3 py-1.5 text-slate-600 hover:text-slate-900">Cancel</button>
-          <button id="modal-submit" class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded">Start task</button>
-        </div>
-      </div>`;
-    $("modal-cancel").addEventListener("click", () => $("new-task-modal").classList.add("hidden"));
-    $("modal-submit").addEventListener("click", () => {
-      const answers = {};
-      document.querySelectorAll(".answer-input").forEach(inp => {
-        if (inp.value.trim()) answers[inp.dataset.q] = inp.value.trim();
-      });
-      submitNewTask(task, answers);
-    });
+    data = await _fetchNextQuestion(task, answers);
   } catch (e) {
     $("modal-body").innerHTML = `<div class="text-sm text-rose-600">Error: ${e}</div>`;
+    return;
   }
+
+  if (data.done || !(data.questions || []).length) {
+    submitNewTask(task, answers);
+    return;
+  }
+
+  const q = data.questions[0];
+  const qNum = Object.keys(answers).length + 1;
+  const priorPairs = Object.entries(answers).map(([qq, aa]) => `
+    <div class="text-xs text-slate-500 border-l-2 border-slate-200 pl-2">
+      <div class="font-medium text-slate-600">${qq.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>
+      <div>${aa.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>
+    </div>`).join("");
+
+  $("modal-body").innerHTML = `
+    <div>
+      <div class="text-sm text-slate-600 mb-3">Task: <span class="font-medium">${task.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</span></div>
+      ${priorPairs ? `<div class="space-y-2 mb-4 max-h-40 overflow-y-auto">${priorPairs}</div>` : ""}
+      <div class="bg-slate-50 border border-slate-200 rounded p-3 mb-3">
+        <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Question ${qNum}</div>
+        <div class="text-sm text-slate-900 mb-3">${q.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>
+        <input id="adaptive-answer" type="text" autofocus
+          class="w-full bg-white border border-slate-300 rounded px-3 py-2 text-sm placeholder-slate-400 focus:outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-100"
+          placeholder="Your answer (or 'doesn't matter' / 'you decide')" />
+      </div>
+      <div class="flex gap-2 justify-between items-center">
+        <button id="modal-skip" class="text-sm text-slate-500 hover:text-slate-900">Skip — start with what I have</button>
+        <div class="flex gap-2">
+          <button id="modal-cancel" class="text-sm px-3 py-1.5 text-slate-600 hover:text-slate-900">Cancel</button>
+          <button id="modal-next" class="bg-slate-900 text-white text-sm px-4 py-2 rounded font-medium hover:bg-slate-800">Next →</button>
+        </div>
+      </div>
+    </div>`;
+
+  const submitAnswer = () => {
+    const ans = $("adaptive-answer").value.trim();
+    if (!ans) return;
+    answers[q] = ans;
+    _runAdaptiveQuestionFlow(task, answers);
+  };
+  $("modal-cancel").addEventListener("click", () => $("new-task-modal").classList.add("hidden"));
+  $("modal-skip").addEventListener("click", () => submitNewTask(task, answers));
+  $("modal-next").addEventListener("click", submitAnswer);
+  $("adaptive-answer").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitAnswer();
+  });
+  $("adaptive-answer").focus();
 }
 
 async function submitNewTask(task, clarifications) {
