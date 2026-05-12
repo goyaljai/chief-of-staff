@@ -349,6 +349,40 @@ def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_pe
     return "\n\n".join(lines)
 
 
+def _collect_user_notes_history(task) -> list[str]:
+    """Return every note the user has added to this task across its
+    lifetime — pending + already consumed.
+
+    Why this exists (live-task audit): the reviewer used to only see
+    `goal` + workspace artifacts. Mid-flight user notes (added via
+    /note) were applied via correction prompts but the reviewer had
+    no signal to verify they were actually reflected in the artifacts.
+    Notes silently dropped → reviewer rubber-stamped passed=True →
+    user got the wrong deliverable. Now the reviewer gets the full
+    history and refuses passed=True if any note isn't visible.
+
+    Source of truth = the in-memory log entries (kind='user_note')
+    plus any still-pending notes in task.user_notes. We dedupe and
+    cap at 15 to keep the prompt bounded.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(text: str) -> None:
+        text = (text or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        out.append(text)
+
+    for entry in getattr(task, "log", None) or []:
+        if isinstance(entry, dict) and entry.get("kind") == "user_note":
+            _add(entry.get("note") or entry.get("text") or "")
+    for n in getattr(task, "user_notes", None) or []:
+        _add(n)
+    return out[:15]
+
+
 def _classify_install_risk(option_a: str) -> str:
     """Classify the install-command in option_a as 'low' or 'high' risk.
 
@@ -1007,7 +1041,15 @@ class SupervisorLoop:
                 declared_block,
                 executor_block,
             ]))
-            review = self.reviewer.final_review(goal=self.task.goal, action_log=combined, workspace=str(self.workspace))
+            review = self.reviewer.final_review(
+                goal=self.task.goal,
+                action_log=combined,
+                workspace=str(self.workspace),
+                # Pass every note the user EVER added (from log_entries)
+                # — not just pending. Reviewer will refuse passed=True if
+                # any historical note isn't reflected in the artifacts.
+                user_notes_history=_collect_user_notes_history(self.task),
+            )
             STORE.append_log(self.task.id, {
                 "kind": "final_review",
                 "passed": review["passed"],
@@ -1235,6 +1277,7 @@ class SupervisorLoop:
                 action_log=combined,
                 workspace=str(self.workspace),
                 inline_skill="",
+                user_notes_history=_collect_user_notes_history(self.task),
             )
             STORE.append_log(self.task.id, {
                 "kind": "final_review",
@@ -1333,6 +1376,21 @@ class SupervisorLoop:
                 user_notes=user_notes,
                 grounding_nudge=grounding,
             )
+            # Live-task audit telemetry: log exactly what the
+            # correction prompt contains so we can see whether notes
+            # actually reached Claude. Earlier real Telegram task
+            # showed notes_consumed firing but the source never
+            # changed — we couldn't tell if the prompt missed the
+            # notes or Claude ignored them. With this log we can.
+            STORE.append_log(self.task.id, {
+                "kind": "correction_prompt_built",
+                "loop_num": loop_num,
+                "issues_count": len(review["issues"]),
+                "user_notes_count": len(user_notes),
+                "user_notes": user_notes,
+                "prompt_chars": len(prompt),
+                "prompt_preview": prompt[:600],
+            })
 
     def _maybe_inject_midloop_nudge(self):
         """V3 #8: mid-loop grounding. Every 25 tool_use events without a verification op,
@@ -1426,9 +1484,20 @@ class SupervisorLoop:
                     # stdout drain (and therefore Claude itself once the
                     # OS pipe fills).
                     loop = asyncio.get_running_loop()
+                    # Bug fix (cost-leak audit): review_action runs in
+                    # a worker thread but ContextVar (set_usage_callback)
+                    # doesn't propagate to executor threads by default.
+                    # Result: every review_action LLM call escaped both
+                    # the cost guardrail and the per-call telemetry —
+                    # measured leak ~$0.40-0.70/task. Wrap the call in
+                    # contextvars.copy_context() so the supervisor's
+                    # usage_callback fires for review_action too.
+                    import contextvars
+                    ctx = contextvars.copy_context()
                     review = await loop.run_in_executor(
                         None,
-                        lambda: self.reviewer.review_action(
+                        lambda: ctx.run(
+                            self.reviewer.review_action,
                             goal=self.task.goal,
                             tool_name=event.tool_name or "",
                             tool_input=event.tool_input,

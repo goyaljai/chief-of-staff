@@ -44,55 +44,13 @@ _REVIEW_FAST_PATH_BASH_PREFIXES = (
     "./gradlew test", "./gradlew lint", "./gradlew check",
     "node --version", "python3 --version", "go version",
 )
-_REVIEW_FAST_PATH_TOOLS = {
-    # Read-only Anthropic tools never need LLM review — they don't
-    # mutate state and the permission hook permits them blindly.
-    "Read", "Grep", "Glob", "TodoWrite", "TodoRead",
-    "ListMcpResourcesTool", "ReadMcpResourceTool",
-    "WebFetch", "WebSearch",
-    # Bug fix (post-Phase-4 audit): the user's global CLAUDE.md
-    # routes everything through the glance-token-saver MCP wrappers.
-    # Without these, C1 fast-path NEVER fires in real traffic — the
-    # measured Databricks task cost stayed flat at $0.24 because 29/35
-    # review_actions were going through `mcp__...__bash_compressed`
-    # not native `Bash`. The MCP read/grep wrappers are functionally
-    # identical to their native counterparts; safe to fast-path.
-    "mcp__glance-token-saver__read_compressed",
-    "mcp__glance-token-saver__grep_compressed",
-}
-
-# Bash-equivalent MCP tools whose `command` payload should be safelist-
-# matched the same way as native Bash. write_file / edit_file are
-# explicitly NOT in this set — mutations always go through the LLM
-# advisory (matches the Write/Edit native tools).
-_REVIEW_FAST_PATH_BASH_LIKE_TOOLS = {
-    "Bash",
-    "mcp__glance-token-saver__bash_compressed",
-}
-
-
-def _is_fast_path_action(tool_name: str, tool_input: dict | None) -> bool:
-    """True iff this action is obviously safe and doesn't need an LLM
-    review_action call. Conservative — only matches the patterns we're
-    100% confident about. The default fall-through is the LLM call."""
-    if tool_name in _REVIEW_FAST_PATH_TOOLS:
-        return True
-    if tool_name in _REVIEW_FAST_PATH_BASH_LIKE_TOOLS:
-        cmd = ((tool_input or {}).get("command") or "").strip()
-        # Refuse to short-circuit if the command pipes / chains / uses
-        # subshells — those can hide arbitrary commands. The LLM gets
-        # a chance to weigh in on those.
-        # Audit 5-r bug fix: also reject `$VAR` and `${VAR}` env-var
-        # expansion — a fast-path-approved `pytest $TARGET` could
-        # resolve to something arbitrary at runtime that the LLM
-        # advisory would have caught.
-        for badch in ("|", "&&", "||", ";", "`", "$(", "${", "$"):
-            if badch in cmd:
-                return False
-        for pref in _REVIEW_FAST_PATH_BASH_PREFIXES:
-            if cmd == pref or cmd.startswith(pref + " ") or cmd.startswith(pref + "\n"):
-                return True
-    return False
+# Static fast-path REMOVED post-cost-leak-audit. The pattern-matching
+# approach was hiding cost rather than measuring it. We'll redesign a
+# proper first-class skip mechanism — likely an LLM-classifier-once
+# with cache, or task-family-aware safelist — after we have several
+# real-task traces to inform the design.
+# The _REVIEW_FAST_PATH_BASH_PREFIXES tuple is kept for reference
+# only; it informs the future design but no code reads it today.
 
 
 class Reviewer:
@@ -112,12 +70,14 @@ class Reviewer:
         workspace: str | None = None,
         inline_skill: str = "",
     ) -> dict:
-        # C1: skip the LLM review for obviously-safe actions. Cuts
-        # ~60-70% of review_action calls on a typical task. The
-        # permission_hook still blocks dangerous patterns at the OS
-        # level; this only skips the LLM advisory.
-        if _is_fast_path_action(tool_name, tool_input):
-            return {"decision": "approve", "message": "fast_path"}
+        # C1 fast-path REMOVED. Per cost-leak audit, the static-pattern
+        # fast-path was hiding a leak (ContextVar usage_callback didn't
+        # propagate to the executor thread, so fast-pathed AND non-
+        # fast-pathed review_action calls were both invisible to
+        # telemetry). Every review_action now hits the LLM so the
+        # llm_call event captures real cost data. We'll redesign a
+        # proper first-class skip mechanism once we have several
+        # real-task traces to inform the design.
         skills = _load_skills(workspace=workspace, inline_skill=inline_skill)
         user = (
             f"Goal: {goal}\n\n"
@@ -192,6 +152,7 @@ class Reviewer:
         action_log: str,
         workspace: str | None = None,
         inline_skill: str = "",
+        user_notes_history: list[str] | None = None,
     ) -> dict:
         """Full end-of-loop review. Returns
         {passed, summary, issues, next_steps}.
@@ -208,9 +169,29 @@ class Reviewer:
              mark passed=false.
         """
         skills = _load_skills(workspace=workspace, inline_skill=inline_skill)
+        # Bug fix (live-task audit): the reviewer used to see only `goal`
+        # — but mid-flight user notes (added via /note) often contain
+        # the most recent specification ("change color to orange", "add
+        # an EditText"). Without user_notes_history, the reviewer would
+        # rubber-stamp passed=True as long as the original goal was met,
+        # ignoring whether the notes were applied. Now we list every
+        # note the user added and require the reviewer to verify each
+        # was reflected in the deliverable.
+        notes_block = ""
+        if user_notes_history:
+            notes_lines = "\n".join(f"  - {n}" for n in user_notes_history[:15])
+            notes_block = (
+                "\n\nMID-FLIGHT USER NOTES (must be reflected in the deliverable, "
+                "in addition to the original goal):\n"
+                f"{notes_lines}\n\n"
+                "If ANY of these notes is not visibly reflected in the workspace "
+                "artifacts (source code, layout, copy, etc.), set passed=false "
+                "and include a clear issue naming which note was ignored.\n"
+            )
         user = (
-            f"Goal: {goal}\n\n"
-            f"Full action log + workspace artifacts:\n{action_log}\n\n"
+            f"Goal: {goal}\n"
+            f"{notes_block}"
+            f"\nFull action log + workspace artifacts:\n{action_log}\n\n"
             "Phase: final review. Output JSON only with this exact shape:\n"
             '{\n'
             '  "passed": true|false,\n'
