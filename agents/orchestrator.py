@@ -272,16 +272,35 @@ class Orchestrator:
         clarifications: dict[str, str],
         workspace: str,
         inline_skill: str = "",
+        env_audit: str = "",
     ) -> str:
         """Build the executor brief — the prompt that gets handed to Claude
         Code. The brief MUST name explicit deliverable files because the
-        executor's job is to produce those files in the workspace."""
+        executor's job is to produce those files in the workspace.
+
+        Parameters
+        ----------
+        env_audit : str
+            Optional pre-rendered markdown block from
+            ``services.env_audit.render_brief_block`` describing which
+            toolchains are available on the executor's machine (G8). Pass
+            an empty string to skip — the brief will then be built without
+            any environment context. When provided, the orchestrator gets
+            it inline so it can pivot the deliverable shape (e.g. propose
+            Expo Go QR when ANDROID_HOME is missing) instead of letting
+            Claude grind on a doomed scaffold.
+        """
         skills = _load_skills(workspace=workspace, inline_skill=inline_skill)
         clarif_text = "\n".join(f"- Q: {q}\n  A: {a}" for q, a in clarifications.items()) or "(none)"
+        # G8: Inject the env-audit markdown into the user prompt right
+        # after the clarifications. Empty string → no extra block, brief
+        # behaves identically to pre-G8.
+        env_block = f"\n{env_audit}\n" if env_audit else ""
         user = (
             "Phase 3 — build the executor brief.\n\n"
             f"Task: {task}\n\n"
-            f"Clarifications:\n{clarif_text}\n\n"
+            f"Clarifications:\n{clarif_text}\n"
+            f"{env_block}\n"
             "Write a precise brief that an executor (Claude Code) can run with no further questions. "
             "Use the Skill brief above as your authoritative guide. Structure:\n"
             "- Objective\n"

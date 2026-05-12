@@ -110,14 +110,87 @@ def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_pe
 
 
 def _parse_escalation(message: str) -> dict:
-    lines = message.strip().splitlines()
+    """Parse a free-text or structured escalation into a typed dict.
+
+    Two formats are recognised:
+
+    1. **Generic escalation** — any message with `A) <text>` and
+       `B) <text>` lines. Returns
+       ``{kind: 'general', question, option_a, option_b}``.
+
+    2. **Environment escalation (G7+)** — message starts with the
+       literal marker ``ESCALATION:`` and has an ``OPTIONS:`` block
+       with ``A) ...``, ``B) ...``, and an ``ABORT) ...`` line. The
+       brief tells Claude to use this exact format whenever an env
+       wall blocks the deliverable. Returns
+       ``{kind: 'environment', question, summary, why, option_a,
+          option_b, option_abort}`` so the UI can render three buttons
+       (install / fallback / abort) instead of generic A/B.
+
+    The two shapes share ``question, option_a, option_b`` so existing
+    UI/bot escalation handlers keep working — they'll just ignore the
+    extra fields. Tier-up clients render the env-specific fields.
+    """
+    text = message.strip()
+    lines = text.splitlines()
+
+    # Generic A) / B) extractor — used for both shapes.
     option_a = next((re.sub(r"^[\s\*\-]*A[\)\.]\s*", "", l).strip()
                      for l in lines if re.match(r"^[\s\*\-]*A[\)\.]", l)),
                     "Proceed as planned")
     option_b = next((re.sub(r"^[\s\*\-]*B[\)\.]\s*", "", l).strip()
                      for l in lines if re.match(r"^[\s\*\-]*B[\)\.]", l)),
                     "Stop and wait for clarification")
-    return {"question": message, "option_a": option_a, "option_b": option_b}
+
+    # G7+ env-escalation marker. Trigger on either an explicit
+    # 'ESCALATION:' header line OR an ABORT) option (only env path
+    # produces ABORT).
+    escalation_header = next(
+        (re.sub(r"^[\s\*\-]*ESCALATION[:\s]*", "", l).strip()
+         for l in lines if re.match(r"^[\s\*\-]*ESCALATION[:\s]", l, re.IGNORECASE)),
+        "",
+    )
+    why_block = ""
+    in_why = False
+    why_buf: list[str] = []
+    for l in lines:
+        s = l.strip()
+        if re.match(r"^[\s\*\-]*WHY[:\s]", s, re.IGNORECASE):
+            in_why = True
+            stripped = re.sub(r"^[\s\*\-]*WHY[:\s]*", "", s).strip()
+            if stripped:
+                why_buf.append(stripped)
+            continue
+        if in_why:
+            if re.match(r"^[\s\*\-]*OPTIONS[:\s]", s, re.IGNORECASE) or re.match(r"^[\s\*\-]*[ABab][\)\.]", s):
+                in_why = False
+                continue
+            if s:
+                why_buf.append(s)
+    why_block = "\n".join(why_buf).strip()
+    option_abort = next(
+        (re.sub(r"^[\s\*\-]*ABORT[\)\.]\s*", "", l).strip()
+         for l in lines if re.match(r"^[\s\*\-]*ABORT[\)\.]", l, re.IGNORECASE)),
+        "",
+    )
+
+    if escalation_header or option_abort:
+        return {
+            "kind": "environment",
+            "question": text,
+            "summary": escalation_header,
+            "why": why_block,
+            "option_a": option_a,
+            "option_b": option_b,
+            "option_abort": option_abort or "Cancel the task — env can't produce what was asked",
+        }
+
+    return {
+        "kind": "general",
+        "question": text,
+        "option_a": option_a,
+        "option_b": option_b,
+    }
 
 
 def _parse_skill_frontmatter(skill_md: str) -> tuple[str, str]:
@@ -359,6 +432,25 @@ class SupervisorLoop:
             self.task.result = {"success": False, "error": f"generate_skill failed: {e}"}
             return
 
+        # G8: env audit before brief — probe the executor's machine for
+        # available toolchains so the orchestrator can pivot the
+        # deliverable shape if the obvious path is blocked (e.g. no
+        # Android SDK → propose Expo Go QR instead). Total wall-time
+        # ~400ms (parallel probes), worth the spend.
+        STORE.append_log(self.task.id, {"kind": "phase", "phase": "env_audit"})
+        try:
+            from services.env_audit import audit, render_brief_block
+            env_audit_result = audit()
+            env_audit_block = render_brief_block(env_audit_result)
+            STORE.append_log(self.task.id, {
+                "kind": "env_audit",
+                "available": [k for k, v in env_audit_result.items() if v],
+                "missing": [k for k, v in env_audit_result.items() if not v],
+            })
+        except Exception as e:
+            STORE.append_log(self.task.id, {"kind": "env_audit_failed", "msg": str(e)})
+            env_audit_block = ""
+
         STORE.set_status(self.task.id, "briefing")
         STORE.append_log(self.task.id, {"kind": "phase", "phase": "build_brief"})
 
@@ -366,6 +458,7 @@ class SupervisorLoop:
             self.task.brief = self.orchestrator.build_brief(
                 self.task.goal, self.task.clarifications, str(self.workspace),
                 inline_skill=self.task.skill_md or "",
+                env_audit=env_audit_block,
             )
         except Exception as e:
             STORE.append_log(self.task.id, {"kind": "error", "where": "build_brief", "msg": str(e)})
@@ -715,6 +808,24 @@ class SupervisorLoop:
 
         if event.type == "text":
             STORE.append_log(self.task.id, {"kind": "text", "text": event.text or ""})
+            # G7+: scan text events for the ESCALATION:/WHY:/OPTIONS:
+            # marker the orchestrator brief tells Claude to emit on
+            # env walls. If found, parse + surface as an environment
+            # escalation and interrupt — beats waiting for Claude to
+            # keep grinding.
+            if event.text and not self.task.escalation:
+                if re.search(r"^\s*[\*\-]?\s*ESCALATION\s*:", event.text, re.IGNORECASE | re.MULTILINE):
+                    parsed = _parse_escalation(event.text)
+                    if parsed.get("kind") == "environment":
+                        STORE.set_escalation(self.task.id, parsed)
+                        STORE.append_log(self.task.id, {
+                            "kind": "executor_escalated",
+                            "summary": parsed.get("summary", "")[:200],
+                        })
+                        try:
+                            self.runner.interrupt()
+                        except Exception:
+                            pass
             return
 
         if event.type == "tool_use":

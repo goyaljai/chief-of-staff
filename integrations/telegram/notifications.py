@@ -160,10 +160,34 @@ async def _poll_task(context: ContextTypes.DEFAULT_TYPE, chat_id: int, task_id: 
 
 
 async def _send_escalation(context, chat_id: int, task_id: str, esc: dict):
-    """Render an A/B inline keyboard for an escalation. The callback_data
-    encodes the task_id + answer letter so the callback handler can
-    submit it back to /task/{id}/escalation without keeping per-chat
-    state."""
+    """Render an inline keyboard for an escalation. callback_data
+    encodes task_id + answer slug so the callback handler can submit
+    it back to /task/{id}/escalation without keeping per-chat state.
+
+    G7+: when esc.kind == 'environment', renders three buttons
+    (install/fix · accept fallback · abort) and surfaces the
+    structured summary/why fields the executor emitted.
+    """
+    if esc.get("kind") == "environment":
+        summary = (esc.get("summary") or "").strip()
+        why = (esc.get("why") or "").strip()
+        opt_a = esc.get("option_a", "")
+        opt_b = esc.get("option_b", "")
+        opt_abort = esc.get("option_abort") or "Cancel the task"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("A — install / fix", callback_data=f"esc:{task_id}:a")],
+            [InlineKeyboardButton("B — accept fallback", callback_data=f"esc:{task_id}:b")],
+            [InlineKeyboardButton("✖ Abort", callback_data=f"esc:{task_id}:abort")],
+        ])
+        text = (
+            f"⚠️ *Environment wall* (`{task_id}`)\n\n"
+            + (f"*{summary}*\n\n" if summary else "")
+            + (f"_Why:_ {why}\n\n" if why else "")
+            + f"*A)* {opt_a}\n*B)* {opt_b}\n*Abort)* {opt_abort}"
+        )
+        await context.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="Markdown")
+        return
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("A", callback_data=f"esc:{task_id}:a"),
         InlineKeyboardButton("B", callback_data=f"esc:{task_id}:b"),

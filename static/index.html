@@ -530,15 +530,40 @@ async function showDetail(id) {
       </div>
     </div>
 
-    ${state.escalation ? `
-      <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
-        <div class="text-xs font-semibold text-purple-700 mb-2">ESCALATION — needs your decision</div>
-        <div class="text-sm whitespace-pre-wrap">${state.escalation.question||''}</div>
-        <div class="flex gap-2 mt-3">
-          <button class="esc-btn px-3 py-1.5 bg-white border border-purple-300 rounded text-sm hover:bg-purple-100" data-answer="a">A) ${state.escalation.option_a||''}</button>
-          <button class="esc-btn px-3 py-1.5 bg-white border border-purple-300 rounded text-sm hover:bg-purple-100" data-answer="b">B) ${state.escalation.option_b||''}</button>
-        </div>
-      </div>` : ""}
+    ${state.escalation ? (() => {
+      const e = state.escalation;
+      const isEnv = e.kind === "environment";
+      // G7+: env wall escalation gets a structured rose-tinted block
+      // with three buttons (install/fallback/abort) instead of generic
+      // A/B; otherwise legacy purple block stays.
+      if (isEnv) {
+        const summary = (e.summary || "").trim();
+        const why = (e.why || "").trim();
+        const optAbort = e.option_abort || "Cancel the task";
+        return `
+          <div class="bg-amber-50 border-2 border-amber-300 rounded-lg p-4 mb-4 shadow-sm">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xs font-bold text-amber-800 uppercase tracking-wider">⚠ Environment wall — needs your decision</span>
+            </div>
+            ${summary ? `<div class="text-sm font-semibold text-amber-900 mb-2">${summary.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>` : ""}
+            ${why ? `<div class="text-xs text-amber-800 mb-3 whitespace-pre-wrap"><span class="font-semibold">Why:</span> ${why.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>` : ""}
+            <div class="flex flex-col gap-2 mt-3">
+              <button class="esc-btn text-left px-3 py-2 bg-white border border-amber-400 rounded text-sm hover:bg-amber-100" data-answer="a"><span class="font-semibold">A — install / fix:</span> ${(e.option_a||'').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</button>
+              <button class="esc-btn text-left px-3 py-2 bg-white border border-amber-400 rounded text-sm hover:bg-amber-100" data-answer="b"><span class="font-semibold">B — accept fallback:</span> ${(e.option_b||'').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</button>
+              <button class="esc-btn text-left px-3 py-2 bg-rose-50 border border-rose-300 rounded text-sm hover:bg-rose-100 text-rose-800" data-answer="abort"><span class="font-semibold">✖ Abort:</span> ${optAbort.replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</button>
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
+          <div class="text-xs font-semibold text-purple-700 mb-2">ESCALATION — needs your decision</div>
+          <div class="text-sm whitespace-pre-wrap">${(e.question||'').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</div>
+          <div class="flex gap-2 mt-3">
+            <button class="esc-btn px-3 py-1.5 bg-white border border-purple-300 rounded text-sm hover:bg-purple-100" data-answer="a">A) ${(e.option_a||'').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</button>
+            <button class="esc-btn px-3 py-1.5 bg-white border border-purple-300 rounded text-sm hover:bg-purple-100" data-answer="b">B) ${(e.option_b||'').replace(/[<>]/g, c => c==='<'?'&lt;':'&gt;')}</button>
+          </div>
+        </div>`;
+    })() : ""}
 
     ${state.result || state.artifacts?.length || state.final_output ? (() => {
       const _failed = ["failed","abandoned","cancelled"].includes(state.status);
