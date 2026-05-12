@@ -22,6 +22,24 @@ System prompts for each LLM persona, plus the per-family skill scaffolds.
   `_parse_escalation` requires all three markers (audit r2 fix —
   prevents prose mentions from triggering fake escalations).
 
+## Caching (P3 #12 — Phase 5 deferred)
+
+Databricks AI Gateway already does **automatic prefix caching** —
+verified empirically: the 35K-token measured input on a 29-call task
+was ~half what fixed-overhead × call-count would predict, meaning the
+gateway is treating the stable system+skills prefix as cached.
+
+**Explicit `cache_control` breakpoints** (Anthropic-native syntax,
+$0.50/Mtok cache reads vs $5/Mtok regular) need verification that
+Databricks gateway supports the `cache_control` field via `extra_body`
+OR a switch to calling Anthropic directly for review_action. Neither
+is risk-free for tonight; deferred to Phase 5.
+
+What's already working in our favor:
+- system prompt (reviewer.md, ~1400 tokens) is stable per task
+- skills_context cap brought to 3500 chars (was 8000) — cached prefix smaller
+- skills_context dropped from review_action entirely (P2 #6) — best caching is no caching of the unused
+
 ## Future — prompt versioning (DOC3)
 
 Today every push to `prompts/*.md` ships immediately. Phase 4 work to

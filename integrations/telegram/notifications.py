@@ -200,21 +200,41 @@ async def _send_completion(context, chat_id: int, task_id: str, state: dict):
     summary = result.get("summary") or "(no summary)"
     next_steps = result.get("next_steps") or ""
 
-    text = f"{emoji} Task {task_id} — {status} in {duration:.0f}s\n\n{summary[:1500]}"
+    # P4 #15: failed-with-best_effort still has a partial deliverable.
+    # User got "❌ task failed" but the workspace had the working APK
+    # (just without orange/EditText). Reframe the message: ⚠️ partial
+    # + clear "couldn't apply X" callout, AND we still send the APK.
+    is_partial = (
+        not result.get("success")
+        and result.get("best_effort")
+        and result.get("deliverables")
+    )
+    if is_partial:
+        header = f"⚠️ Task {task_id} — partial result in {duration:.0f}s"
+    else:
+        header = f"{emoji} Task {task_id} — {status} in {duration:.0f}s"
+    text = f"{header}\n\n{summary[:1500]}"
 
     if next_steps:
         text += f"\n\n— How to use it —\n{next_steps[:2500]}"
 
     if not result.get("success") and result.get("issues"):
         issues_text = "\n".join(f"• {i[:200]}" for i in (result.get("issues") or [])[:3])
-        text += f"\n\nIssues:\n{issues_text}"
+        if is_partial:
+            text += (
+                "\n\n⚠️ I couldn't apply these (the file below is best-"
+                "effort without them):\n" + issues_text
+            )
+        else:
+            text += f"\n\nIssues:\n{issues_text}"
 
     text += f"\n\nWorkspace: {workspace}"
 
     await context.bot.send_message(chat_id, text)
 
-    # Bug #1 fix: send the actual deliverable artifacts back in chat.
-    # User explicitly asked "send it to me here" — text alone isn't enough.
+    # P4 #15: _send_artifacts ships any declared deliverables — even
+    # on failed status — so the user gets the partial APK with a
+    # clear "best-effort" caveat from the message above.
     await _send_artifacts(context, chat_id, state)
 
 

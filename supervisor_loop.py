@@ -349,21 +349,62 @@ def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_pe
     return "\n\n".join(lines)
 
 
+def _maybe_seed_scaffold(task_goal: str, workspace: Path, env_audit_result: dict) -> str | None:
+    """P3 #11: pre-built scaffold seeding. Detect when the task family
+    matches a scaffold we've prepared and copy it into the workspace
+    at task start.
+
+    Today: only `android-hello-world`. Adding more is a directory drop
+    + one if/elif here. Returns the scaffold name when seeded, None
+    when no match.
+
+    Why this isn't in agents/orchestrator: it touches the filesystem
+    workspace, which is the supervisor's responsibility. Orchestrator
+    just generates prompts; supervisor sets up the world.
+    """
+    tg = (task_goal or "").lower()
+    is_android = (
+        "android" in tg
+        and any(k in tg for k in ("hello", "app", "apk", "activity"))
+        and bool(env_audit_result.get("gradle"))
+    )
+    if not is_android:
+        return None
+    src = (Path(__file__).resolve().parent
+           / "skills" / "templates" / "scaffolds" / "android-hello-world")
+    if not src.is_dir():
+        return None
+    import shutil
+    try:
+        for item in src.rglob("*"):
+            if item.is_file() and item.name != "README.md":
+                rel = item.relative_to(src)
+                dst = workspace / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dst)
+        return "android-hello-world"
+    except Exception:
+        return None
+
+
 def _collect_user_notes_history(task) -> list[str]:
     """Return every note the user has added to this task across its
     lifetime — pending + already consumed.
 
-    Why this exists (live-task audit): the reviewer used to only see
-    `goal` + workspace artifacts. Mid-flight user notes (added via
-    /note) were applied via correction prompts but the reviewer had
-    no signal to verify they were actually reflected in the artifacts.
-    Notes silently dropped → reviewer rubber-stamped passed=True →
-    user got the wrong deliverable. Now the reviewer gets the full
-    history and refuses passed=True if any note isn't visible.
+    P0 #1 + #20: the canonical source is now task.notes_history
+    (append-only column, persisted across server restarts). Pre-fix
+    we read from task.log which only carried the last 100 events,
+    so notes from a long-running task could scroll off and the
+    reviewer would miss them.
 
-    Source of truth = the in-memory log entries (kind='user_note')
-    plus any still-pending notes in task.user_notes. We dedupe and
-    cap at 15 to keep the prompt bounded.
+    Sources, in priority order:
+      1. task.notes_history (T8 column, authoritative)
+      2. task.user_notes (still-pending)
+      3. task.log entries with kind=user_note (legacy fallback for
+         older tasks predating T8)
+      4. log_entries DB query (last-resort for hydrated tasks where
+         task.log only has the last 100 events — handles old tasks
+         with notes outside that window).
     """
     out: list[str] = []
     seen: set[str] = set()
@@ -375,11 +416,29 @@ def _collect_user_notes_history(task) -> list[str]:
         seen.add(text)
         out.append(text)
 
+    for n in getattr(task, "notes_history", None) or []:
+        _add(n)
+    for n in getattr(task, "user_notes", None) or []:
+        _add(n)
     for entry in getattr(task, "log", None) or []:
         if isinstance(entry, dict) and entry.get("kind") == "user_note":
             _add(entry.get("note") or entry.get("text") or "")
-    for n in getattr(task, "user_notes", None) or []:
-        _add(n)
+    # Last resort: pull from DB for hydrated tasks. Cheap (one SELECT
+    # filtered by task_id + kind, and we cap at 30). Only fires when
+    # the in-memory sources are empty.
+    if not out:
+        try:
+            from persistence.pool import _conn
+            with _conn() as c, c.cursor() as cur:
+                cur.execute(
+                    "SELECT payload FROM log_entries WHERE task_id=%s AND kind='user_note' ORDER BY id LIMIT 30",
+                    (task.id,),
+                )
+                for (p,) in cur.fetchall():
+                    if isinstance(p, dict):
+                        _add(p.get("note") or p.get("text") or "")
+        except Exception:
+            pass
     return out[:15]
 
 
@@ -647,6 +706,12 @@ class SupervisorLoop:
             }
         except Exception:
             self.task.prompt_versions = {}
+        # P1 #4: cap grounding_nudge at 1 per task. Multiple nudges
+        # don't help (today's failed task fired twice — both useless,
+        # cost $0.044). One nudge is plenty signal; if Claude is still
+        # off-track after one, escalation is the right move not more
+        # nudges.
+        self._grounding_nudge_fired = False
 
     def _build_coaching_prompt(self, coaching: dict) -> str:
         """Render the reviewer's mid-stream `correct` decision as a
@@ -917,6 +982,27 @@ class SupervisorLoop:
             except Exception as e:
                 STORE.append_log(self.task.id, {"kind": "env_audit_failed", "msg": str(e)})
                 env_audit_block = ""
+                env_audit_result = {}
+            # P3 #11: seed a pre-built scaffold when the task family
+            # matches and the env supports the build. Today only
+            # `android-hello-world`. Saves ~7 boilerplate write_file
+            # calls per Android task = ~7 review_action calls = ~$0.12
+            # + several Claude executor turns.
+            try:
+                scaffold = _maybe_seed_scaffold(self.task.goal, self.workspace, env_audit_result)
+                if scaffold:
+                    STORE.append_log(self.task.id, {
+                        "kind": "scaffold_seeded",
+                        "scaffold": scaffold,
+                    })
+                    env_audit_block += (
+                        f"\n\n## Pre-seeded scaffold\n\nA `{scaffold}` scaffold "
+                        "was already copied into the workspace. "
+                        "READ the existing files before writing — "
+                        "modify in place rather than rewriting from scratch."
+                    )
+            except Exception as _se:
+                STORE.append_log(self.task.id, {"kind": "scaffold_error", "msg": str(_se)})
 
             STORE.set_status(self.task.id, "briefing")
             STORE.append_log(self.task.id, {"kind": "phase", "phase": "build_brief"})
@@ -1025,7 +1111,7 @@ class SupervisorLoop:
                     pass
 
             STORE.set_status(self.task.id, "reviewing_loop_1")
-            full_log = _summarize_log(self.task.log, limit=300, full_text=True)
+            full_log = _summarize_log(self.task.log, limit=50, full_text=True)
             artifacts = _list_workspace_artifacts(self.workspace)
             # Approach A: parse the brief's declared deliverables and pass them
             # to the reviewer as ground truth. Approach B: also surface any
@@ -1256,7 +1342,7 @@ class SupervisorLoop:
                     return
 
             STORE.set_status(self.task.id, f"reviewing_loop_{loop_num}")
-            full_log = _summarize_log(self.task.log, limit=300, full_text=True)
+            full_log = _summarize_log(self.task.log, limit=50, full_text=True)
             artifacts = _list_workspace_artifacts(self.workspace)
             # Approach A + B (audit r3 deeper-fix): pass brief-declared and
             # executor-declared deliverables as ground truth so the reviewer
@@ -1340,7 +1426,28 @@ class SupervisorLoop:
                 self.task.user_notes.clear()
                 STORE.append_log(self.task.id, {"kind": "notes_consumed", "notes": user_notes})
 
-            if loop_num == MAX_CORRECTION_LOOPS:
+            # P1 #3: short-circuit MAX_CORRECTION_LOOPS when the same
+            # issue repeats across consecutive loops. Today's failed
+            # task burned loop_3 ($0.10+) producing the same "text not
+            # orange" issue Claude couldn't fix in loop_2. If a loop
+            # didn't move the needle, another won't.
+            new_issues_lower = [(i or "").lower()[:120] for i in (review["issues"] or [])]
+            prev_issues_lower = getattr(self, "_last_loop_issues_lower", [])
+            self._last_loop_issues_lower = new_issues_lower
+            same_issues_repeat = (
+                loop_num >= 2
+                and new_issues_lower
+                and new_issues_lower == prev_issues_lower
+            )
+            if same_issues_repeat:
+                STORE.append_log(self.task.id, {
+                    "kind": "loop_short_circuit",
+                    "loop": loop_num,
+                    "reason": "same issues as previous loop — bailing to best_effort",
+                    "issues": review["issues"],
+                })
+
+            if loop_num == MAX_CORRECTION_LOOPS or same_issues_repeat:
                 # Same ordering fix — see audit r3 ordering note above.
                 self.task.result = {
                     "success": False,
@@ -1358,7 +1465,10 @@ class SupervisorLoop:
                 return
 
             grounding = ""
-            if self._should_nudge():
+            # P1 #4: only fire grounding_nudge ONCE per task. The
+            # second/third nudge in a row never adds new signal — if
+            # the first nudge didn't unstick Claude, more won't.
+            if self._should_nudge() and not self._grounding_nudge_fired:
                 try:
                     grounding = self.orchestrator.generate_grounding_nudge(
                         task=self.task.goal,
@@ -1367,6 +1477,7 @@ class SupervisorLoop:
                         loop_num=loop_num,
                     )
                     if grounding:
+                        self._grounding_nudge_fired = True
                         STORE.append_log(self.task.id, {"kind": "grounding_nudge", "nudge": grounding})
                 except Exception as e:
                     STORE.append_log(self.task.id, {"kind": "grounding_error", "msg": str(e)})
@@ -1501,14 +1612,37 @@ class SupervisorLoop:
                             goal=self.task.goal,
                             tool_name=event.tool_name or "",
                             tool_input=event.tool_input,
-                            recent_actions=_summarize_log(self.task.log, limit=20),
+                            # P2 #7: cap recent_actions at 3 events
+                            # (was 20). Reviewer's "is this sane right
+                            # now" judgement only needs the immediate
+                            # neighbors — saves ~400 tokens per call.
+                            recent_actions=_summarize_log(self.task.log, limit=3),
                             workspace=str(self.workspace),
                             inline_skill="",
                         ),
                     )
                 except Exception as e:
-                    review = {"decision": "approve", "message": f"review failed: {e}"}
+                    # P0 #19: reviewer LLM exception used to silently
+                    # default to approve. Now treat as request_evidence
+                    # so the supervisor doesn't pass the action through
+                    # an empty advisory. Logged loudly.
+                    review = {
+                        "decision": "request_evidence",
+                        "message": f"[reviewer error] {e}",
+                        "_review_exception": True,
+                    }
 
+                # P0 #19: log parse-failure / exception cases under a
+                # distinct kind so we can audit how often the reviewer
+                # is silently failing.
+                if review.get("_parse_failure") or review.get("_review_exception"):
+                    STORE.append_log(self.task.id, {
+                        "kind": "reviewer_parse_failure",
+                        "tool": event.tool_name,
+                        "raw_excerpt": review.get("_raw_excerpt", ""),
+                        "exception": review.get("_review_exception", False),
+                        "message": review.get("message", ""),
+                    })
                 STORE.append_log(self.task.id, {
                     "kind": "reviewer",
                     "tool": event.tool_name,
@@ -1692,29 +1826,51 @@ class SupervisorLoop:
             STORE.append_log(self.task.id, {"kind": "mem0_index_error", "msg": str(e)})
 
     def _write_learning(self, loop_num: int, review: dict):
+        # P1 #5: lesson promotion is a Databricks LLM call (~$0.025)
+        # AND adds wall-time before the user's "done" message lands.
+        # Move it OFF the response path — fire-and-forget on a daemon
+        # thread. If it fails or takes 30s, the user already got the
+        # done notification.
+        captured_task_id = self.task.id
+        captured_goal = self.task.goal
+        captured_skill = getattr(self.task, "skill_md", "") or ""
+        captured_brief = self.task.brief
+        captured_action_log = _summarize_log(self.task.log, limit=80)
+        captured_summary = review.get("summary", "")
+        captured_issues = list(review.get("issues") or [])
+        captured_passed = bool(review.get("passed"))
+        captured_workspace = str(self.workspace)
+
+        def _bg():
+            try:
+                lessons = self.orchestrator.find_promotable_lessons(
+                    task=captured_goal,
+                    skill_md=captured_skill,
+                    brief=captured_brief,
+                    action_log_summary=captured_action_log,
+                    review_summary=captured_summary,
+                    review_issues=captured_issues,
+                    passed=captured_passed,
+                    workspace=captured_workspace,
+                )
+                if not lessons:
+                    STORE.append_log(captured_task_id, {"kind": "learning_skipped", "reason": "no promotable lessons"})
+                    return
+                added = append_to_global(lessons, origin_task_id=captured_task_id)
+                STORE.append_log(captured_task_id, {
+                    "kind": "learning_promoted",
+                    "added_new": added,
+                    "promoted_total": len(lessons),
+                    "lessons": lessons,
+                })
+            except Exception as e:
+                STORE.append_log(captured_task_id, {"kind": "learning_error", "msg": str(e)})
+
         try:
-            lessons = self.orchestrator.find_promotable_lessons(
-                task=self.task.goal,
-                skill_md=getattr(self.task, "skill_md", "") or "",
-                brief=self.task.brief,
-                action_log_summary=_summarize_log(self.task.log, limit=80),
-                review_summary=review.get("summary", ""),
-                review_issues=review.get("issues", []) or [],
-                passed=bool(review.get("passed")),
-                workspace=str(self.workspace),
-            )
-            if not lessons:
-                STORE.append_log(self.task.id, {"kind": "learning_skipped", "reason": "no promotable lessons"})
-                return
-            added = append_to_global(lessons, origin_task_id=self.task.id)
-            STORE.append_log(self.task.id, {
-                "kind": "learning_promoted",
-                "added_new": added,
-                "promoted_total": len(lessons),
-                "lessons": lessons,
-            })
+            import threading
+            threading.Thread(target=_bg, daemon=True, name=f"learning-{captured_task_id[:8]}").start()
         except Exception as e:
-            STORE.append_log(self.task.id, {"kind": "learning_error", "msg": str(e)})
+            STORE.append_log(self.task.id, {"kind": "learning_error", "msg": f"thread spawn failed: {e}"})
 
     def _build_post_escalation_prompt(self) -> str:
         """V3.5 D5: handle free-text escalation answers in addition to a/b.

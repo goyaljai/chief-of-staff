@@ -146,6 +146,28 @@ async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     await update.message.reply_text(f"Failed to add note: {e}")
                 return ConversationHandler.END
+            # P4 #16: workspace continuity for follow-ups. Last task is
+            # terminal but RECENT (< 30 min). Treat the new prompt as a
+            # follow-up modification: surface the prior workspace + goal
+            # as a clarification so the orchestrator builds a brief that
+            # MODIFIES in place rather than scaffolding fresh.
+            if state and state.get("status") in ("done", "failed", "abandoned"):
+                started = state.get("started_at") or 0
+                import time as _time
+                if started and (_time.time() - started) < 1800:  # 30 min
+                    prev_ws = state.get("workspace")
+                    prev_goal = state.get("goal")
+                    if prev_ws and prev_goal:
+                        context.chat_data["_seed_from_task_id"] = active
+                        context.chat_data["_seed_from_workspace"] = prev_ws
+                        context.chat_data["_seed_from_goal"] = prev_goal
+                        await update.message.reply_text(
+                            f"🧷 Continuing from your last task ({active}). "
+                            f"I'll modify that workspace in place. "
+                            f"(prefix 'new:' to scaffold from scratch instead)"
+                        )
+                # fall through to fresh task creation, but with seed in chat_data
+                context.chat_data.pop("task_id", None)
             else:
                 context.chat_data.pop("task_id", None)
 
@@ -257,11 +279,27 @@ async def receive_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _launch(update: Update, context: ContextTypes.DEFAULT_TYPE, task: str, answers: dict):
     chat_id = update.effective_chat.id
+    # P4 #16: workspace continuity. If the previous task in this chat
+    # was recent + done/failed, receive_task stashed the prior workspace
+    # path. Pass it to the supervisor as a clarification so the brief
+    # generator knows to MODIFY in place rather than scaffold fresh.
+    seed_ws = context.chat_data.pop("_seed_from_workspace", None)
+    seed_goal = context.chat_data.pop("_seed_from_goal", None)
+    seed_task_id = context.chat_data.pop("_seed_from_task_id", None)
+    clarifications = dict(answers or {})
+    if seed_ws and seed_goal:
+        clarifications.setdefault(
+            "_continuation_of_task",
+            f"This is a follow-up to task {seed_task_id}. Original ask: \"{seed_goal[:200]}\". "
+            f"Existing artifacts to MODIFY IN PLACE (not scaffold fresh) live at: {seed_ws}. "
+            f"Read the workspace first, identify what's already built, and apply only the "
+            f"diff the user is asking for now."
+        )
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 f"{SUPERVISOR_API_BASE_URL}/task/run",
-                json={"task": task, "clarifications": answers},
+                json={"task": task, "clarifications": clarifications},
                 timeout=HTTP_TIMEOUT,
             )
             r.raise_for_status()

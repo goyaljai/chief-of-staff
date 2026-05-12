@@ -74,11 +74,17 @@ def add_note(task_id: str, body: NoteRequest):
             detail=f"note too long ({len(note)} chars; max {_MAX_NOTE_LEN})",
         )
     state.user_notes.append(note)
+    # P0 #1: also push to notes_history (append-only spec). Reviewer
+    # uses this to verify mid-flight notes were applied. Kept dedup'd
+    # so re-asking the same note doesn't duplicate the spec.
+    if note not in (state.notes_history or []):
+        state.notes_history.append(note)
     STORE.append_log(task_id, {"kind": "user_note", "note": note})
     return {
         "ok": True,
         "queued_for_next_loop": True,
         "notes_pending": len(state.user_notes),
+        "notes_history_size": len(state.notes_history),
     }
 
 

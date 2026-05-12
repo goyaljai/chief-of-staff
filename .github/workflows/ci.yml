@@ -53,7 +53,8 @@ jobs:
             -f migrations/postgres_v3_5_b2_skills.sql \
             -f migrations/postgres_v2_0_t6_escalation.sql \
             -f migrations/postgres_v2_0_t6b_persist_runtime_state.sql \
-            -f migrations/postgres_v2_0_t7_prompt_versions.sql
+            -f migrations/postgres_v2_0_t7_prompt_versions.sql \
+            -f migrations/postgres_v2_0_t8_notes_history.sql
 
       - name: import smoke test (catches missing imports / NameErrors)
         run: python eval/test_imports.py
@@ -94,6 +95,9 @@ jobs:
 
       - name: schema-drift check (TaskState ↔ tasks ↔ upsert ↔ hydration)
         run: python eval/test_schema_drift.py
+
+      - name: cost-regression gate (P3 #14 — catches "C1 didn't fire on MCP"-class bugs)
+        run: python eval/test_cost_regression.py
 
   promptfoo-gate:
     # T5: per-PR fast prompt-eval gate. Runs the orchestrator + reviewer
@@ -172,7 +176,8 @@ jobs:
             -f migrations/postgres_v3_5_b2_skills.sql \
             -f migrations/postgres_v2_0_t6_escalation.sql \
             -f migrations/postgres_v2_0_t6b_persist_runtime_state.sql \
-            -f migrations/postgres_v2_0_t7_prompt_versions.sql
+            -f migrations/postgres_v2_0_t7_prompt_versions.sql \
+            -f migrations/postgres_v2_0_t8_notes_history.sql
 
       - name: start server
         run: |

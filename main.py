@@ -45,6 +45,7 @@ from config import STATIC_DIR
 from persistence import STORE
 
 from routes.admin import admin_router
+from routes.admin_cost import admin_cost_router
 from routes.ask import ask_router
 from routes.health import health_router
 from routes.task_lifecycle import task_lifecycle_router
@@ -82,6 +83,7 @@ app.include_router(task_stream_router)
 app.include_router(undo_router)
 app.include_router(ask_router)
 app.include_router(admin_router)
+app.include_router(admin_cost_router)
 
 
 # ─── lifecycle ────────────────────────────────────────────────────────────

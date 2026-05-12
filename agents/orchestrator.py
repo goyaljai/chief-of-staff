@@ -351,9 +351,13 @@ class Orchestrator:
                 "## Objective\n## What 'done' means\n## Knowledge / standards that apply\n"
                 "## Failure patterns to watch for\n## Verification required\n## Gotchas\n## Scope boundaries\n"
                 "```\n\n"
-                "Be specific to THIS task. Output only the SKILL.md content. No preamble."
+                "Be specific to THIS task. Output only the SKILL.md content. No preamble. "
+                "Target ≤ 600 tokens — every section can be terse."
             )
-        return _chat(self.system, user, max_tokens=3500, skills_context=skills).strip()
+        # P2 #10: tighten max_tokens (was 3500, actual ~837). The
+        # model writes shorter when both the prompt asks for terseness
+        # AND the budget reflects it.
+        return _chat(self.system, user, max_tokens=1500, skills_context=skills).strip()
 
     def generate_skill_and_brief(
         self,
@@ -563,9 +567,13 @@ class Orchestrator:
             "- Each step's action becomes a SEPARATE Claude Code subprocess in the SAME workspace directory.\n"
             "- Do NOT emit `## Steps` for tasks that are inherently single-shot (one file, one essay, one analysis). "
             "Emit it only when 2+ steps are genuinely independent or when there's a clear topological order with parallel branches.\n\n"
-            "Output markdown only, no preamble."
+            "Output markdown only, no preamble. Target ≤ 800 tokens — be terse."
         )
-        return _chat(self.system, user, max_tokens=4096, skills_context=skills).strip()
+        # P2 #10: tighten max_tokens cap (was 4096, actual outputs were
+        # ~1100). Encourages shorter briefs even when the model would
+        # otherwise pad. Verified locally that briefs at 1500-token
+        # cap still cover all required sections.
+        return _chat(self.system, user, max_tokens=1500, skills_context=skills).strip()
 
     def build_correction_prompt(
         self,

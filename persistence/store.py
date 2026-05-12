@@ -58,6 +58,11 @@ class TaskState:
     cost_claude_usd: float = 0.0
     keep_workspace: bool = False
     user_notes: list[str] = field(default_factory=list)
+    # P0 #1: append-only notes spec. Every note the user ever added,
+    # never cleared — reviewer compares workspace ↔ this on every
+    # final_review to verify mid-flight asks landed in the deliverable.
+    # user_notes (above) is the pending queue, cleared on injection.
+    notes_history: list[str] = field(default_factory=list)
     claude_plan: list[dict] = field(default_factory=list)
     # T7 (DOC3 — prompt version audit trail): hash-fingerprint of every
     # prompt file the orchestrator/reviewer used at task start. Lets us
@@ -461,6 +466,8 @@ class TaskStore:
                 prompt_versions=_as_obj(row.get("prompt_versions"), {}) or {},
                 wall_time_secs=row.get("wall_time_secs"),
                 claude_turn_count=row.get("claude_turn_count") or 0,
+                # T8 / P0 #1: rehydrate the append-only notes spec.
+                notes_history=_as_obj(row.get("notes_history"), []) or [],
             )
             for l in full["logs"][-100:]:
                 p = _as_obj(l["payload"], None)

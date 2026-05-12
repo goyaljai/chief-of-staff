@@ -39,7 +39,11 @@ MAX_LEARNED_ENTRIES = 50
 # ≈ 2k tokens; tune as the lesson library grows. Truncation always drops
 # the LOWEST-frequency entries first, so the cap costs us least-impactful
 # rules first.
-_LEARNED_SECTION_CHAR_BUDGET = 8000
+# P1 #18: tightened from 8000 → 3500 chars (~875 tokens). Was sending
+# the full lesson library on EVERY orchestrator + reviewer call.
+# 3500 chars holds ~25 high-frequency lessons; lower-frequency ones
+# rotate through but don't bloat hot prompts.
+_LEARNED_SECTION_CHAR_BUDGET = 3500
 
 
 def _prompts_dir() -> Path:

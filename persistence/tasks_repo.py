@@ -36,10 +36,12 @@ def upsert_task(state) -> None:
                                keep_workspace, escalation, escalation_set_at,
                                user_notes, corrections, escalation_answer,
                                claude_plan, skill_preview,
-                               prompt_versions, wall_time_secs, claude_turn_count)
+                               prompt_versions, wall_time_secs, claude_turn_count,
+                               notes_history)
             VALUES (%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
                     %s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,
-                    %s::jsonb,%s,%s)
+                    %s::jsonb,%s,%s,
+                    %s::jsonb)
             ON CONFLICT (id) DO UPDATE SET
               goal=EXCLUDED.goal, clarifications=EXCLUDED.clarifications,
               workspace=EXCLUDED.workspace, status=EXCLUDED.status,
@@ -60,7 +62,8 @@ def upsert_task(state) -> None:
               skill_preview=EXCLUDED.skill_preview,
               prompt_versions=EXCLUDED.prompt_versions,
               wall_time_secs=EXCLUDED.wall_time_secs,
-              claude_turn_count=EXCLUDED.claude_turn_count
+              claude_turn_count=EXCLUDED.claude_turn_count,
+              notes_history=EXCLUDED.notes_history
             """,
             (
                 state.id, state.goal, json.dumps(state.clarifications),
@@ -93,6 +96,8 @@ def upsert_task(state) -> None:
                 json.dumps(getattr(state, "prompt_versions", {}) or {}),
                 getattr(state, "wall_time_secs", None),
                 int(getattr(state, "claude_turn_count", 0) or 0),
+                # T8 / P0 #1: append-only notes spec.
+                json.dumps(getattr(state, "notes_history", []) or []),
             ),
         )
 

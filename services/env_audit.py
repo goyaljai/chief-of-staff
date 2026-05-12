@@ -227,6 +227,18 @@ def render_brief_block(audit_result: dict[str, str | None]) -> str:
         "the ESCALATION/WHY/OPTIONS format with the exact install command "
         "— do NOT silently fall back to a weaker deliverable."
     )
+    # P1 #2 — env-audit-trust instruction. Without this, Claude does
+    # 4-5 redundant `java -version` / `ls SDK` / `find gradle-wrapper.jar`
+    # tool calls per Android task even though we already probed. Each
+    # redundant call costs 1 review_action ($0.017+) plus an executor
+    # turn. Trusting the audit cuts those entirely.
+    lines.append(
+        "TRUST THIS AUDIT — do NOT re-probe the environment with your "
+        "own `java -version` / `ls`-on-SDK / `find gradle-wrapper.jar` "
+        "/ `which adb` / similar. The values above are authoritative as "
+        "of task start. If you genuinely need fresher data (e.g. "
+        "after running an installer), say so and proceed."
+    )
     return "\n".join(lines)
 
 

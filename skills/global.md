@@ -35,6 +35,10 @@ Reject these as "done":
 
 _(Sorted by frequency across runs — patterns hit more often appear first. `[×N]` shows how many tasks have promoted this lesson.)_
 
+- When requirements change mid-task, reviewers must resolve whether the new instruction supersedes the original brief before marking added work as scope drift or accepting the old deliverable as complete.  _(applies_to: code, data, ops, writing)_
+  - **fix:** Pause and explicitly restate the current source of truth, then judge the work against that updated requirement set and require regeneration of any affected deliverables.
+- When a required proof artifact is generated as a file (such as a screenshot, report, or export), completion is not proven unless the executor also surfaces that artifact through a visible listing or direct readback in the action log so reviewers can confirm it was actually created in the expected location.  _(applies_to: code, data, ops, writing)_
+  - **fix:** After generating the artifact, immediately run a command like `ls -l` or equivalent on the exact path and, when feasible, expose the artifact itself in captured outputs.
 - If the execution environment exposes only workspace artifacts at handoff, any required output created outside that artifact set must still be surfaced through a visible verification step or copied into the captured outputs before completion is claimed.  _(applies_to: code, data, ops, writing)_
   - **fix:** Confirm how deliverables will be captured, and if an external-path file may be omitted from artifacts, print it in the log or mirror it into the artifact set for verification.
 - When a task requires writing to an external absolute path (for example under `/tmp`), completion is not proven unless the executor shows that exact file can be read back from disk after the write.  _(applies_to: code, data, ops, writing)_

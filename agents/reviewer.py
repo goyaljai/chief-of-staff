@@ -86,14 +86,30 @@ class Reviewer:
             f"  Tool: {tool_name}\n"
             f"  Input: {json.dumps(tool_input)[:500]}\n"
             f"  Output: {(tool_output or '')[:500]}\n\n"
-            "Phase: per-action review. Output JSON only."
+            'Phase: per-action review. Output JSON only with shape '
+            '{"decision":"approve|correct|escalate|request_evidence","message":"<short>"}.'
         )
-        raw = _chat(self.system, user, max_tokens=512, skills_context=skills)
+        # P2 #6: skills_context dropped from review_action — reviewer
+        # doesn't need the lesson library to approve `ls`. Saves ~900
+        # tokens × every review_action call.
+        raw = _chat(self.system, user, max_tokens=512)
         data = _extract_json(raw)
-        return {
-            "decision": data.get("decision", "approve"),
-            "message": data.get("message", ""),
-        }
+        # P0 #19: parse failure must NOT silently approve. Pre-fix, an
+        # empty {} from _extract_json would default to decision=approve,
+        # so a malformed LLM response = silent free pass through the
+        # gate (we paid for the call but got no advisory). Now treat
+        # missing/unrecognized decision as request_evidence so the
+        # supervisor logs it loudly and re-asks instead of silently
+        # passing the action.
+        decision = data.get("decision")
+        if decision not in ("approve", "correct", "escalate", "request_evidence"):
+            return {
+                "decision": "request_evidence",
+                "message": "[reviewer parse failure] response not parseable as expected JSON",
+                "_parse_failure": True,
+                "_raw_excerpt": (raw or "")[:200],
+            }
+        return {"decision": decision, "message": data.get("message", "")}
 
     def drift_check(
         self,
