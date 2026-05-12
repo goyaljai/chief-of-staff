@@ -64,3 +64,18 @@ prod (a follow-up commit, not part of T3):
 3. Re-run the Promptfoo gate (`eval/promptfoo/`) to confirm pass-rate
    doesn't drop.
 4. Re-run a curated subset of `run_eval.py` to confirm the full E2E.
+
+## G5 — mining skill templates from prod history
+
+`mine_templates.py` reads completed tasks from Postgres, groups them by
+family (code/research/writing/data/ops), and asks DSPy to extract the
+recurring acceptance phrasings + gotchas the reviewer actually flagged.
+
+```bash
+python eval/dspy/mine_templates.py
+```
+
+Output lands at `eval/dspy/optimized/templates/{family}.json`. A human
+reviews the JSON and merges high-signal entries into the
+`skills/templates/{family}.md` scaffolds — that keeps a human in the
+loop on what becomes authoritative guidance for the orchestrator.

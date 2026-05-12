@@ -41,6 +41,67 @@ from .llm import _chat, _extract_json
 from .prompts import _load_prompt, _load_skills
 
 
+_TEMPLATES_DIR = (
+    __import__("pathlib").Path(__file__).resolve().parent.parent
+    / "skills" / "templates"
+)
+
+# G5: cheap keyword-based task-family classifier. Returns one of
+# code|research|writing|data|ops|"" (unknown). The orchestrator uses
+# the result to load skills/templates/{family}.md as a starting
+# scaffold for generate_skill_brief, so common task shapes don't have
+# to be re-derived from scratch every time.
+def _classify_task_family(task: str) -> str:
+    t = (task or "").lower()
+    # Order matters — research wins over code when the task literally
+    # says "research". Inside each family the keywords use word
+    # boundaries (leading/trailing space) where ambiguous tokens like
+    # "go" or "app" could otherwise match unrelated nouns ("mango").
+    if any(k in t for k in (
+        "research ", "find ", "summari", "compare ", "what are", "explain ",
+        "top ", " best ", "pros and cons", "investigate", "look up",
+    )):
+        return "research"
+    if any(k in t for k in (
+        "build ", "implement ", "code ", "script ", " app ", " cli ", "library",
+        "function ", "endpoint", " api ", "compile ", "kotlin", "python ",
+        " go ", "rust ", "android", "react ", " node ", " java ",
+        "typescript", "fix bug", "refactor",
+    )):
+        return "code"
+    if any(k in t for k in (
+        "blog", "essay", "post", "memo", "press release", "announcement",
+        "tweet", "newsletter", "linkedin",
+    )):
+        return "writing"
+    if any(k in t for k in (
+        "csv", "dataset", "etl", "pipeline", "schema", "transform", "join",
+        "aggregate", "analytics", "analysis", "data ",
+    )):
+        return "data"
+    if any(k in t for k in (
+        "deploy", "kubectl", "kubernetes", "k8s", "terraform", "ci ", " ci.",
+        "github actions", "cron", "infra", "monitoring", "runbook", "config",
+        "dockerfile", "rollout",
+    )):
+        return "ops"
+    return ""
+
+
+def _load_family_template(family: str) -> str:
+    """Read a per-family scaffold from skills/templates/{family}.md.
+    Returns '' on missing or unreadable. The Orchestrator injects this
+    into generate_skill_brief as a starting point so common task shapes
+    have a known structure."""
+    if not family:
+        return ""
+    path = _TEMPLATES_DIR / f"{family}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
 class Orchestrator:
     """Manager role — meta-thinking, questions, brief, correction prompts,
     auto-resolve."""
@@ -187,6 +248,17 @@ class Orchestrator:
         instead of regenerating — saves an LLM round of meta-thinking."""
         skills = _load_skills()
         clarif_text = "\n".join(f"- Q: {q}\n  A: {a}" for q, a in clarifications.items()) or "(none)"
+        # G5: load the per-family template (code/research/writing/data/ops)
+        # if the task obviously falls into one. The template gives the
+        # SKILL.md generator a known-good starting structure for that
+        # task family; skip injection when the family is unknown.
+        family = _classify_task_family(task)
+        template_text = _load_family_template(family)
+        template_section = (
+            f"\n\nFamily template ({family}) — use as a starting scaffold; "
+            "adapt to THIS task, don't paste verbatim:\n\n"
+            f"```\n{template_text.strip()}\n```\n"
+        ) if template_text else ""
         library_section = ""
         if library_match:
             library_section = (
@@ -200,6 +272,7 @@ class Orchestrator:
                 "Phase 2 — refine your earlier meta-thinking into the final SKILL.md.\n\n"
                 f"Task: {task}\n\n"
                 f"Your earlier preview (from question-asking phase):\n{skill_preview}\n"
+                f"{template_section}"
                 f"{library_section}\n"
                 f"Clarifications you got from the user:\n{clarif_text}\n\n"
                 "REFINE the preview into a final SKILL.md, incorporating what the clarifications tell you. "
@@ -225,6 +298,7 @@ class Orchestrator:
             user = (
                 "Phase 2 — generate the SKILL.md for this task (Anthropic skill-creator format).\n\n"
                 f"Task: {task}\n\n"
+                f"{template_section}"
                 f"{library_section}\n"
                 f"Clarifications:\n{clarif_text}\n\n"
                 "Output the SKILL.md exactly in this format:\n\n"
