@@ -1047,7 +1047,37 @@ class SupervisorLoop:
                     "applied": "queued_for_sequential_loop",
                 })
 
+        # Bug fix (live-task audit, Telegram task 20dbdac633e8):
+        # When the DAG review FAILED and user added mid-flight notes,
+        # the supervisor queued them via notes_after_dag and fell
+        # through to sequential — but the initial sequential prompt was
+        # just `self.task.brief`, so Claude never saw the notes on the
+        # first turn. Notes sat in task.user_notes until a
+        # correction-loop fail consumed them, which never happened in
+        # the live run because loop_1 "passed" review (APK existed) but
+        # the source code still said "Hello world" not "Hello Priyanka".
+        # Inject any pending notes into the brief on first sequential
+        # entry so Claude sees them on turn 1.
         prompt = self.task.brief
+        if self.task.user_notes:
+            notes_block = "\n".join(f"  - {n}" for n in self.task.user_notes[:10])
+            prompt = (
+                f"{self.task.brief}\n\n"
+                "IMPORTANT — the user added these notes mid-flight while a previous\n"
+                "DAG attempt was running. They MUST be applied to the deliverable\n"
+                "in addition to the brief above:\n"
+                f"{notes_block}\n\n"
+                "If the brief and the notes conflict, the notes are more recent and win.\n"
+                "When you finish, your DELIVERABLE_PATHS marker still names the same\n"
+                "files; the difference is the file CONTENT must reflect the notes."
+            )
+            consumed = list(self.task.user_notes)
+            self.task.user_notes.clear()
+            STORE.append_log(self.task.id, {
+                "kind": "notes_consumed",
+                "notes": consumed,
+                "consumed_at": "sequential_loop_entry",
+            })
         session_id: str | None = None
 
         for loop_num in range(1, MAX_CORRECTION_LOOPS + 1):
@@ -1194,7 +1224,29 @@ class SupervisorLoop:
                 "deliverables": review.get("deliverables", []),
             })
 
-            if review["passed"]:
+            # Bug fix (live-task audit, Telegram task 20dbdac633e8):
+            # mirror the DAG path's "passed=True AND no pending user_notes"
+            # check. If the user added a note mid-loop and the loop
+            # finished without consuming it, force another correction
+            # loop instead of declaring done — otherwise we ship a
+            # deliverable that ignores the user's most recent ask.
+            if review["passed"] and self.task.user_notes:
+                notes_preview = "; ".join(f'"{n[:80]}"' for n in self.task.user_notes[:3])
+                self.task.corrections.append(
+                    f"Review passed but {len(self.task.user_notes)} user note(s) "
+                    f"are still pending and were NOT applied to the deliverable: "
+                    f"{notes_preview}. Update the deliverable in place to reflect "
+                    f"these notes, then re-verify."
+                )
+                STORE.append_log(self.task.id, {
+                    "kind": "loop_passed_but_notes_pending",
+                    "loop": loop_num,
+                    "notes": list(self.task.user_notes),
+                    "action": "forcing_correction_loop_to_apply_notes",
+                })
+                # Fall through to the post-pass correction-prep block
+                # below by skipping the success early-return.
+            elif review["passed"]:
                 # Bug fix (Phase 3 audit r3, ordering): assign result
                 # BEFORE set_status. set_status calls _persist; if the
                 # result is set after, the DB row keeps result=NULL and
