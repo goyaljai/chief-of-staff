@@ -294,11 +294,20 @@ async def handle_escalation_callback(update: Update, context: ContextTypes.DEFAU
     task_id, answer = parts[1], parts[2]
     chat_id = update.effective_chat.id
 
+    # G7+: the env-escalation surface adds an explicit "abort" button.
+    # That maps to a hard cancel, not an escalation answer — calling
+    # /escalation with answer='abort' would just store the string and
+    # let the runner keep grinding. Route to /cancel instead so the
+    # subprocess actually dies.
+    is_abort = answer.lower() == "abort"
+    endpoint = "cancel" if is_abort else "escalation"
+    payload: dict | None = None if is_abort else {"answer": answer}
+
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
-                f"{SUPERVISOR_API_BASE_URL}/task/{task_id}/escalation",
-                json={"answer": answer},
+                f"{SUPERVISOR_API_BASE_URL}/task/{task_id}/{endpoint}",
+                json=payload,
                 timeout=HTTP_TIMEOUT,
             )
             r.raise_for_status()
@@ -306,9 +315,13 @@ async def handle_escalation_callback(update: Update, context: ContextTypes.DEFAU
         await context.bot.send_message(chat_id, f"❌ Failed to submit answer: {e}")
         return
 
+    decision_label = "ABORTED — task cancelled" if is_abort else f"Answered: *{answer.upper()}*"
     await query.edit_message_text(
-        (query.message.text or "") + f"\n\n✓ Answered: *{answer.upper()}*",
+        (query.message.text or "") + f"\n\n✓ {decision_label}",
         parse_mode="Markdown",
     )
+
+    if is_abort:
+        return
 
     asyncio.create_task(_poll_task(context, chat_id, task_id))
