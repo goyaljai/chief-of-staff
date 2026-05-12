@@ -93,6 +93,24 @@ class Orchestrator:
         else:
             qa_block = ""
 
+        # T4: surface relevant cross-task memories from Mem0 cloud so
+        # the orchestrator can skip questions whose answers are
+        # already known from prior tasks (e.g. "user prefers minimal
+        # blog post output" → don't ask about tone). No-op when
+        # MEM0_API_KEY is unset. Only fire on the first call to keep
+        # token + latency cost down.
+        memory_block = ""
+        if is_first_call:
+            try:
+                from services import memory as mem
+                if mem.is_enabled():
+                    memories = mem.get_relevant_memories(task, limit=5)
+                    memory_block = mem.render_memory_block(memories)
+                    if memory_block:
+                        memory_block = "\n" + memory_block + "\n"
+            except Exception:
+                memory_block = ""
+
         meta_block = (
             "Step A: think about what this task actually requires. Identify:\n"
             "  - the kind of work (code build, research, writing, data, ops, etc.)\n"
@@ -109,6 +127,7 @@ class Orchestrator:
             "Phase 1 — meta-think + clarify (adaptive, one question at a time).\n\n"
             f"User's task:\n{task}\n"
             f"{qa_block}"
+            f"{memory_block}"
             "\n"
             f"{meta_block}"
             "Step B: decide whether ONE more clarifying question would meaningfully change "

@@ -562,7 +562,13 @@ class SupervisorLoop:
             artifacts = _list_workspace_artifacts(self.workspace)
             combined = f"{full_log}\n\nDAG result: {dag_result}\n\n=== Workspace artifacts ===\n{artifacts}"
             review = self.reviewer.final_review(goal=self.task.goal, action_log=combined, workspace=str(self.workspace))
-            STORE.append_log(self.task.id, {"kind": "final_review", "passed": review["passed"], "issues": review["issues"], "summary": review["summary"]})
+            STORE.append_log(self.task.id, {
+                "kind": "final_review",
+                "passed": review["passed"],
+                "issues": review["issues"],
+                "summary": review["summary"],
+                "deliverables": review.get("deliverables", []),
+            })
             if review["passed"] and not self.task.user_notes:
                 STORE.set_status(self.task.id, "done")
                 self._write_learning(1, review)
@@ -718,6 +724,7 @@ class SupervisorLoop:
                 "passed": review["passed"],
                 "issues": review["issues"],
                 "summary": review["summary"],
+                "deliverables": review.get("deliverables", []),
             })
 
             if review["passed"]:
@@ -1036,6 +1043,33 @@ class SupervisorLoop:
             STORE.append_log(self.task.id, {"kind": "rag_indexed"})
         except Exception as e:
             STORE.append_log(self.task.id, {"kind": "rag_index_error", "msg": str(e)})
+
+        # T4: also persist a structured memory to Mem0 cloud so
+        # future tasks can pick up cross-task context (user prefs,
+        # project facts, recurring patterns). No-op when MEM0_API_KEY
+        # is unset — pgvector + skill_lessons remain authoritative.
+        try:
+            from services import memory as mem
+            if mem.is_enabled():
+                # Single-user system today; if/when we add multi-user,
+                # plumb the originating user_id through TaskState.
+                user_id = "cos-default"
+                deliverables = []
+                if isinstance(self.task.result, dict):
+                    deliverables = self.task.result.get("deliverables") or []
+                ok = mem.add_task_memory(
+                    task=self.task.goal,
+                    deliverables=deliverables,
+                    summary=review.get("summary", "") or "",
+                    rationale=review.get("rationale", "") or "",
+                    user_id=user_id,
+                    metadata={"task_id": self.task.id, "passed": bool(review.get("passed"))},
+                )
+                STORE.append_log(self.task.id, {
+                    "kind": "mem0_indexed" if ok else "mem0_skipped",
+                })
+        except Exception as e:
+            STORE.append_log(self.task.id, {"kind": "mem0_index_error", "msg": str(e)})
 
     def _write_learning(self, loop_num: int, review: dict):
         try:
