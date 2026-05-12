@@ -42,13 +42,50 @@ from eval.dspy.dataset import QUESTION_GEN, REVIEWER, split  # noqa: E402
 from eval.dspy.signatures import QuestionGenSig, ReviewerSig  # noqa: E402
 
 
+def _maybe_wire_langsmith() -> None:
+    """Route DSPy/litellm calls into LangSmith when the user has tracing
+    on. DSPy uses litellm under the hood; litellm exposes a built-in
+    LangSmith callback that captures every LLM call. We turn it on
+    only when ``LANGSMITH_TRACING=true`` AND ``LANGSMITH_API_KEY`` is
+    set so it stays opt-in and silent in CI by default.
+
+    The project name defaults to ``cos-dspy-t3`` so the optimizer's
+    runs are easy to filter from the prod orchestrator + reviewer
+    traces. Override with ``LANGSMITH_PROJECT_DSPY`` if you'd rather
+    co-mingle them.
+    """
+    if os.environ.get("LANGSMITH_TRACING", "").lower() not in ("true", "1", "yes"):
+        return
+    if not os.environ.get("LANGSMITH_API_KEY"):
+        print("[langsmith] LANGSMITH_TRACING=true but LANGSMITH_API_KEY missing; skipping DSPy trace wiring")
+        return
+    project = os.environ.get("LANGSMITH_PROJECT_DSPY") or os.environ.get(
+        "LANGSMITH_PROJECT", "cos-dspy-t3",
+    )
+    os.environ.setdefault("LANGSMITH_PROJECT", project)
+    try:
+        import litellm
+        cbs = list(getattr(litellm, "success_callback", None) or [])
+        if "langsmith" not in cbs:
+            cbs.append("langsmith")
+            litellm.success_callback = cbs
+        cbs_fail = list(getattr(litellm, "failure_callback", None) or [])
+        if "langsmith" not in cbs_fail:
+            cbs_fail.append("langsmith")
+            litellm.failure_callback = cbs_fail
+        print(f"[langsmith] DSPy/litellm traces will land in project '{project}'")
+    except Exception as e:
+        print(f"[langsmith] failed to enable DSPy trace wiring: {e}")
+
+
 def _configure_lm() -> dspy.LM:
     """Wire DSPy's LM to the same Databricks AI Gateway prod uses.
 
     Why: the optimization should target the exact model the
     orchestrator uses in prod (Opus 4.7), not a cheaper proxy. The
     DSPy litellm provider supports OpenAI-compatible bases, which
-    is what the gateway exposes."""
+    is what the gateway exposes.
+    """
     load_dotenv()
     token = os.environ.get("DATABRICKS_TOKEN")
     base = os.environ.get("DATABRICKS_BASE_URL")
@@ -56,6 +93,7 @@ def _configure_lm() -> dspy.LM:
         raise SystemExit(
             "[T3] DATABRICKS_TOKEN + DATABRICKS_BASE_URL must be set in env."
         )
+    _maybe_wire_langsmith()
     lm = dspy.LM(
         model="openai/databricks-claude-opus-4-7",
         api_base=base,

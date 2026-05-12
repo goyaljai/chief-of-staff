@@ -322,6 +322,19 @@ async def handle_escalation_callback(update: Update, context: ContextTypes.DEFAU
     )
 
     if is_abort:
+        # Bug fix (Phase 3 audit): previously we returned silently after
+        # /cancel, so the user never saw a final "task cancelled"
+        # message — only the inline edit. If /cancel succeeded but the
+        # runner died slowly, there was no second confirmation. Send
+        # an explicit follow-up so the user knows the runner is dead.
+        try:
+            await context.bot.send_message(
+                chat_id,
+                f"🛑 Task `{task_id}` cancelled. The runner has been stopped.",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
         return
 
     asyncio.create_task(_poll_task(context, chat_id, task_id))

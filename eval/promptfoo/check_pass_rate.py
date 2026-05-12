@@ -59,6 +59,12 @@ def main() -> int:
                         help="run.json path. Pass multiple times to combine across configs.")
     parser.add_argument("--tolerance", type=float, default=5.0,
                         help="max allowed drop in percentage points (default: 5)")
+    parser.add_argument("--init-baseline", action="store_true",
+                        help="explicitly write the current run as the baseline. "
+                             "Required when baseline.json is missing — without "
+                             "this flag, a missing baseline is a hard failure "
+                             "(prevents silent regressions if the file is "
+                             "deleted or lost).")
     args = parser.parse_args()
 
     run_passed = 0
@@ -81,7 +87,19 @@ def main() -> int:
           f"across {len(args.run)} config(s)")
 
     if not os.path.isfile(args.baseline):
-        print(f"[gate] no baseline at {args.baseline} — writing current run as the baseline.")
+        if not args.init_baseline:
+            # Bug fix (Phase 3 audit): silently writing a fresh
+            # baseline when the file is missing was a footgun — anyone
+            # accidentally deleting baseline.json would mask the next
+            # PR's regression. Now require an explicit flag.
+            print(
+                f"[gate] FAIL: no baseline at {args.baseline} and --init-baseline not set.\n"
+                "       Pass --init-baseline ONCE to write the current run as the\n"
+                "       new baseline (e.g. after a deliberate prompt change).",
+                file=sys.stderr,
+            )
+            return 2
+        print(f"[gate] writing current run as new baseline at {args.baseline}")
         with open(args.baseline, "w") as f:
             json.dump({"pass_rate_pct": run_pct, "passed": run_passed, "total": run_total}, f, indent=2)
         return 0

@@ -174,7 +174,19 @@ def _parse_escalation(message: str) -> dict:
         "",
     )
 
-    if escalation_header or option_abort:
+    # Bug fix (Phase 3 audit): kind=environment used to fire on JUST
+    # `escalation_header OR option_abort`, which means any prose line
+    # starting with "ESCALATION:" — even Claude saying "I considered
+    # ESCALATION: but decided not to" — would trigger a fake env wall.
+    # The structured format the orchestrator brief actually instructs
+    # Claude to emit always has all of ESCALATION: + WHY: + OPTIONS:
+    # together. Require all three before classifying as environment.
+    has_options = any(
+        re.match(r"^[\s\*\-]*OPTIONS[:\s]", line, re.IGNORECASE)
+        for line in lines
+    )
+    is_structured_env = bool(escalation_header) and bool(why_block) and has_options
+    if is_structured_env or option_abort:
         return {
             "kind": "environment",
             "question": text,

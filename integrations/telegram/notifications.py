@@ -265,6 +265,7 @@ async def _send_artifacts(context, chat_id: int, state: dict):
     seen_basenames: set[str] = set()
     sent = 0
     skipped_missing: list[str] = []
+    skipped_empty: list[str] = []
     skipped_oversize: list[str] = []
 
     for rel_path in deliverables:
@@ -283,7 +284,10 @@ async def _send_artifacts(context, chat_id: int, state: dict):
 
         size = os.path.getsize(abs_path)
         if size == 0:
-            skipped_missing.append(f"{rel_path} (empty)")
+            # Bug fix (Phase 3 audit): empty files are NOT missing —
+            # the file exists but is zero bytes. Track separately so
+            # the user message is accurate.
+            skipped_empty.append(rel_path)
             continue
         if size > _TG_DOC_MAX_BYTES:
             skipped_oversize.append(f"{rel_path} ({size // (1024*1024)}MB)")
@@ -310,6 +314,9 @@ async def _send_artifacts(context, chat_id: int, state: dict):
     if skipped_missing:
         notes.append(f"⚠️ {len(skipped_missing)} declared deliverable(s) missing in workspace: "
                      + ", ".join(skipped_missing[:3]))
+    if skipped_empty:
+        notes.append(f"⚠️ {len(skipped_empty)} declared deliverable(s) exist but are empty: "
+                     + ", ".join(skipped_empty[:3]))
     if skipped_oversize:
         notes.append(f"⚠️ {len(skipped_oversize)} deliverable(s) > 50MB (Telegram limit): "
                      + ", ".join(skipped_oversize[:3]))

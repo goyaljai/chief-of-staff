@@ -107,16 +107,37 @@ _PROBES: dict[str, callable] = {
 
 def audit() -> dict[str, str | None]:
     """Run all probes in parallel. Returns a mapping of tool name to a
-    human-readable version string (or None if missing/errored)."""
+    human-readable version string (or None if missing/errored).
+
+    Bug fix (Phase 3 audit): the original ``with ThreadPoolExecutor``
+    block would block on ``__exit__`` waiting for any thread that
+    survived its 4s ``fut.result(timeout=...)`` call. subprocess.run
+    enforces its own timeout so this is rare, but if a probe ever
+    hangs (e.g. a tool that prints to stdin or spins on a lock) the
+    supervisor would wedge in env_audit. Use ``shutdown(wait=False)``
+    to detach lingering threads — they're daemon-style and the
+    process can exit while they're still running.
+    """
     out: dict[str, str | None] = {}
-    with ThreadPoolExecutor(max_workers=len(_PROBES)) as pool:
+    pool = ThreadPoolExecutor(max_workers=len(_PROBES))
+    try:
         futures = {pool.submit(fn): name for name, fn in _PROBES.items()}
-        for fut in as_completed(futures):
+        for fut in as_completed(futures, timeout=_PROBE_TIMEOUT_SECS + 2):
             name = futures[fut]
             try:
                 out[name] = fut.result(timeout=_PROBE_TIMEOUT_SECS + 1)
             except Exception:
                 out[name] = None
+        # Mark anything we never collected as missing (probe deadlocked).
+        for name in _PROBES:
+            out.setdefault(name, None)
+    except Exception:
+        # as_completed itself raised TimeoutError — fill remaining
+        # entries with None and bail out without joining stuck threads.
+        for name in _PROBES:
+            out.setdefault(name, None)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     return out
 
 
