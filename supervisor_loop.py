@@ -468,6 +468,7 @@ class SupervisorLoop:
                     "success": True,
                     "summary": review["summary"],
                     "next_steps": review.get("next_steps", ""),
+                    "deliverables": review.get("deliverables", []),
                     "loops": 1,
                     "execution": "dag_parallel",
                     "workspace": str(self.workspace),
@@ -623,6 +624,7 @@ class SupervisorLoop:
                     "success": True,
                     "summary": review["summary"],
                     "next_steps": review.get("next_steps", ""),
+                    "deliverables": review.get("deliverables", []),
                     "loops": loop_num,
                     "corrections_made": len(self.task.corrections),
                     "workspace": str(self.workspace),
@@ -648,6 +650,7 @@ class SupervisorLoop:
                     "best_effort": True,
                     "summary": review["summary"],
                     "issues": review["issues"],
+                    "deliverables": review.get("deliverables", []),
                     "loops": loop_num,
                     "workspace": str(self.workspace),
                 }

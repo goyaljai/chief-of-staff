@@ -144,7 +144,8 @@ class Reviewer:
             '                 If it\'s an Android app: how to build/install (./gradlew installDebug etc.).\n'
             '                 If it\'s a doc/research: where the file is + what it contains.\n'
             '                 If it depends on another service running: state that + the start command.\n'
-            '                 Always include exact file paths and commands. Multi-line OK.>"\n'
+            '                 Always include exact file paths and commands. Multi-line OK.>",\n'
+            '  "deliverables": ["<workspace-relative-path>", ...]\n'
             '}\n\n'
             "Rules:\n"
             "1. passed=true ONLY if BOTH (a) demonstrable verification evidence exists, AND (b) zero issues.\n"
@@ -152,7 +153,20 @@ class Reviewer:
             "3. next_steps is REQUIRED whenever passed=true — tell the user EXACTLY how to use the deliverable.\n"
             "   Imagine you handed off to a colleague who has never seen this. What 3-5 commands or links do they need?\n"
             "4. If only skills/SKILL.md exists and the goal asked for something else, mark passed=false.\n"
-            "5. If a named deliverable file doesn't exist in the workspace, mark passed=false."
+            "5. If a named deliverable file doesn't exist in the workspace, mark passed=false.\n"
+            "\n"
+            "DELIVERABLES (G10 — critical):\n"
+            "The `deliverables` field is the EXACT list of workspace-relative file paths the user actually\n"
+            "asked for. The Telegram bot will send these files (and ONLY these) back to the user as documents.\n"
+            "  • Include: the apk, the pdf, the dataset, the script, the report — whatever the goal named.\n"
+            "  • EXCLUDE: scaffolding (gradlew, build.gradle, package-lock.json, .gitignore, Dockerfile, etc.),\n"
+            "    intermediate build outputs, duplicate copies of the same file at different paths, READMEs\n"
+            "    unless the README itself was the deliverable, anything inside node_modules / dist / build / .git.\n"
+            "  • If the goal didn't ask for any file (pure research / Q&A answered in chat), return an empty list [].\n"
+            "  • If the user's goal was 'send me X', deliverables MUST contain X. If X doesn't exist in the\n"
+            "    workspace, mark passed=false and explain in issues.\n"
+            "  • Paths must be workspace-relative, no leading slash. Example: 'hello-world-debug.apk', not\n"
+            "    '/Users/.../hello-world-debug.apk' and not 'workspace/hello-world-debug.apk'."
         )
         raw = _chat(self.system, user, max_tokens=2048, skills_context=skills)
         data = _extract_json(raw)
@@ -160,6 +174,25 @@ class Reviewer:
         passed = bool(data.get("passed", False))
         summary = (data.get("summary") or "").strip()
         next_steps = (data.get("next_steps") or "").strip()
+        # G10: deliverables is workspace-relative paths the bot will hand
+        # back. Normalize: drop empties, strip leading slashes, dedup,
+        # cap at a sane upper bound so the LLM can't accidentally request
+        # 100 files.
+        raw_delivs = data.get("deliverables") or []
+        if not isinstance(raw_delivs, list):
+            raw_delivs = []
+        deliverables: list[str] = []
+        seen: set[str] = set()
+        for p in raw_delivs:
+            if not isinstance(p, str):
+                continue
+            p = p.strip().lstrip("/")
+            if not p or p in seen:
+                continue
+            seen.add(p)
+            deliverables.append(p)
+            if len(deliverables) >= 10:
+                break
         if not summary:
             summary = "(reviewer did not produce a summary)"
             issues = list(issues) + ["Reviewer summary missing — re-review required."]
@@ -171,4 +204,5 @@ class Reviewer:
             "issues": issues,
             "summary": summary,
             "next_steps": next_steps,
+            "deliverables": deliverables,
         }
