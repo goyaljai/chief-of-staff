@@ -281,6 +281,12 @@ class TaskStore:
         else:
             s.escalation_answer = stripped
         s.escalation_event.set()
+        # T6 (Phase 3 audit r3): persist the answer so a server crash
+        # between the user's tap and the supervisor's resume doesn't
+        # silently lose the user's choice. The escalation_event itself
+        # is asyncio-only (in-process), but the answer is what the
+        # supervisor reads on resume.
+        self._persist(s)
         return True
 
     def add_cost(self, tid: str, in_tokens: int = 0, out_tokens: int = 0, claude_usd: float = 0.0):
@@ -393,6 +399,17 @@ class TaskStore:
                 cost_databricks_out=row["cost_databricks_out"] or 0,
                 cost_claude_usd=row["cost_claude_usd"] or 0.0,
                 keep_workspace=bool(row["keep_workspace"]),
+                # T6 (Phase 3 audit r3): rehydrate escalation state so a
+                # task that escalated before a crash still has its
+                # ESCALATION/WHY/OPTIONS payload available to the user.
+                escalation=_as_obj(row.get("escalation"), None),
+                escalation_set_at=row.get("escalation_set_at"),
+                # T6b: rehydrate the rest of the runtime fields.
+                user_notes=_as_obj(row.get("user_notes"), []) or [],
+                corrections=_as_obj(row.get("corrections"), []) or [],
+                escalation_answer=row.get("escalation_answer"),
+                claude_plan=_as_obj(row.get("claude_plan"), []) or [],
+                skill_preview=row.get("skill_preview") or "",
             )
             for l in full["logs"][-100:]:
                 p = _as_obj(l["payload"], None)

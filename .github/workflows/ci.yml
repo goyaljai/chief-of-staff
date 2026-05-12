@@ -50,7 +50,9 @@ jobs:
         run: |
           PGPASSWORD=ci psql -h localhost -U postgres -d cos_test -v ON_ERROR_STOP=1 \
             -f migrations/postgres_v3.sql \
-            -f migrations/postgres_v3_5_b2_skills.sql
+            -f migrations/postgres_v3_5_b2_skills.sql \
+            -f migrations/postgres_v2_0_t6_escalation.sql \
+            -f migrations/postgres_v2_0_t6b_persist_runtime_state.sql
 
       - name: import smoke test (catches missing imports / NameErrors)
         run: python eval/test_imports.py
@@ -163,7 +165,9 @@ jobs:
             -c "CREATE EXTENSION IF NOT EXISTS vector;" \
             -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;" \
             -f migrations/postgres_v3.sql \
-            -f migrations/postgres_v3_5_b2_skills.sql
+            -f migrations/postgres_v3_5_b2_skills.sql \
+            -f migrations/postgres_v2_0_t6_escalation.sql \
+            -f migrations/postgres_v2_0_t6b_persist_runtime_state.sql
 
       - name: start server
         run: |

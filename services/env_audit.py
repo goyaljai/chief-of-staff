@@ -13,43 +13,49 @@ deliverable shape ("no Android SDK → propose Expo Go QR" instead of
 
 Design
 ------
-A single ``audit()`` call runs ~10 probes in parallel via thread pool,
-each capped at 3s. Total wall-time well under 1s on a healthy box. The
-result is a flat dict::
+The probe set lives in ``services/env_probes.json`` — a data file, NOT
+hard-coded Python — so adding a new toolchain (JAVA_HOME, NVM_DIR,
+M2_HOME, the next thing tomorrow needs) is a config edit, not a code
+change. Each probe has a ``type`` and a small bag of type-specific
+fields:
 
-    {
-      "python3": "3.12.4",
-      "node": "22.4.0",
-      "npm": "10.8.1",
-      "yarn": None,
-      "gradle": None,
-      "android_home": None,
-      "xcode": "available",
-      "docker": None,
-      "git": "2.45.2",
-      "rust": None,
-    }
+  - ``version_cmd``  — run a `--version`-style subprocess
+  - ``env_path``     — read one or more env vars; report only when the
+                       referenced path actually exists on disk
+  - ``xcode_clt``    — special-case `xcrun -f xcodebuild` lookup
 
-Truthy = installed/available; None = missing or errored.
+Probes run in parallel via a thread pool with a 3 s per-probe ceiling
+and a hard 5 s overall ceiling. Total wall-time on a healthy box is
+well under 1 s.
 
-The orchestrator gets this as a markdown block in the brief prompt
-("Environment audit") so it can warn Claude up-front about missing
-toolchains and propose realistic deliverables.
+The orchestrator gets the result as a markdown block in the brief
+prompt ("Environment audit") so it can warn Claude up-front about
+missing toolchains and propose realistic deliverables.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
+from pathlib import Path
+from typing import Any, Callable
 
+log = logging.getLogger(__name__)
 
 _PROBE_TIMEOUT_SECS = 3
+_PROBES_FILE = Path(__file__).resolve().parent / "env_probes.json"
 
+
+# ────────────────────────────────────────────────────────────────────
+# Probe primitives
+# ────────────────────────────────────────────────────────────────────
 
 def _run_version(args: list[str]) -> str | None:
     """Run a `--version`-style probe. Returns the first non-empty line
-    of stdout (or stderr — many tools print to stderr) trimmed, or None
-    on failure / non-zero exit / timeout."""
+    of stdout (or stderr — many tools print to stderr) trimmed, or
+    None on failure / non-zero exit / timeout."""
     try:
         r = subprocess.run(
             args,
@@ -66,26 +72,28 @@ def _run_version(args: list[str]) -> str | None:
     return out[0].strip() if out else None
 
 
-def _check_env_var(name: str) -> str | None:
-    """Read an env var that points to a filesystem location (e.g.
-    ``ANDROID_HOME``). Returns the value only when it actually resolves
-    to an existing directory.
+def _check_env_path(*var_names: str) -> str | None:
+    """Read one or more env vars in priority order and return the first
+    one whose value points to an existing directory. Returns None when
+    none are set, or all are stale (set to a path that no longer
+    exists on disk).
 
-    Bug fix (Phase 3 audit r2): a stale env var (set in shell rc files
-    pointing to a deleted SDK) used to report as "available", which
-    misled the orchestrator into proposing builds that the executor
-    couldn't run. Verify the path before claiming the toolchain is
-    present.
+    A stale env-var path is treated as "missing" because reporting it
+    as available misleads the orchestrator into proposing builds that
+    the executor can't run (Bug 3, Phase 3 audit r2).
     """
-    v = os.environ.get(name, "").strip()
-    if not v:
-        return None
-    if not os.path.isdir(v):
-        return None
-    return v
+    for name in var_names:
+        v = os.environ.get(name, "").strip()
+        if not v:
+            continue
+        if not os.path.isdir(v):
+            log.debug("[env_audit] %s=%s but path does not exist; skipping", name, v)
+            continue
+        return v
+    return None
 
 
-def _check_xcode() -> str | None:
+def _check_xcode_clt() -> str | None:
     """xcrun -f xcodebuild returns a path if Xcode CLT is installed."""
     try:
         r = subprocess.run(
@@ -102,36 +110,79 @@ def _check_xcode() -> str | None:
     return None
 
 
-# (key, callable). All run in parallel.
-_PROBES: dict[str, callable] = {
-    "python3": lambda: _run_version(["python3", "--version"]),
-    "node": lambda: _run_version(["node", "--version"]),
-    "npm": lambda: _run_version(["npm", "--version"]),
-    "pnpm": lambda: _run_version(["pnpm", "--version"]),
-    "yarn": lambda: _run_version(["yarn", "--version"]),
-    "gradle": lambda: _run_version(["gradle", "--version"]),
-    "android_home": lambda: _check_env_var("ANDROID_HOME") or _check_env_var("ANDROID_SDK_ROOT"),
-    "xcode": _check_xcode,
-    "docker": lambda: _run_version(["docker", "--version"]),
-    "git": lambda: _run_version(["git", "--version"]),
-    "rust": lambda: _run_version(["cargo", "--version"]),
-    "go": lambda: _run_version(["go", "version"]),
-}
+# ────────────────────────────────────────────────────────────────────
+# Probe-type dispatch
+# ────────────────────────────────────────────────────────────────────
+
+def _build_probe_callable(spec: dict) -> Callable[[], str | None] | None:
+    """Translate one JSON probe spec into a zero-arg callable that
+    returns either a human-readable detection string or None."""
+    ptype = spec.get("type")
+    if ptype == "version_cmd":
+        args = list(spec.get("args") or [])
+        if not args:
+            return None
+        return lambda: _run_version(args)
+    if ptype == "env_path":
+        var_names = list(spec.get("vars") or [])
+        if not var_names:
+            return None
+        return lambda: _check_env_path(*var_names)
+    if ptype == "xcode_clt":
+        return _check_xcode_clt
+    log.warning("[env_audit] unknown probe type %r in registry; ignoring", ptype)
+    return None
+
+
+def _load_probes() -> dict[str, Callable[[], str | None]]:
+    """Load probes from env_probes.json. Returns an empty dict if the
+    file is missing or malformed — env_audit is a quality-of-life
+    layer, never break the supervisor on a misconfig."""
+    if not _PROBES_FILE.is_file():
+        log.warning("[env_audit] %s missing; no probes will run", _PROBES_FILE)
+        return {}
+    try:
+        with open(_PROBES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        log.warning("[env_audit] failed to parse %s: %s", _PROBES_FILE, e)
+        return {}
+    out: dict[str, Callable[[], str | None]] = {}
+    for spec in data.get("probes") or []:
+        name = (spec or {}).get("name")
+        if not name or name in out:
+            continue
+        fn = _build_probe_callable(spec)
+        if fn is None:
+            continue
+        out[name] = fn
+    return out
+
+
+# Cached at import time. Tests can monkeypatch _PROBES if they want.
+_PROBES: dict[str, Callable[[], str | None]] = _load_probes()
+
+
+def reload_probes() -> dict[str, Callable[[], str | None]]:
+    """Re-read env_probes.json. Useful when the JSON has been edited
+    and you want the change picked up without restarting the server."""
+    global _PROBES
+    _PROBES = _load_probes()
+    return _PROBES
 
 
 def audit() -> dict[str, str | None]:
-    """Run all probes in parallel. Returns a mapping of tool name to a
-    human-readable version string (or None if missing/errored).
+    """Run all probes in parallel. Returns a mapping of probe name to
+    a human-readable detection string (or None if missing/errored).
 
     Bug fix (Phase 3 audit): the original ``with ThreadPoolExecutor``
     block would block on ``__exit__`` waiting for any thread that
-    survived its 4s ``fut.result(timeout=...)`` call. subprocess.run
-    enforces its own timeout so this is rare, but if a probe ever
-    hangs (e.g. a tool that prints to stdin or spins on a lock) the
-    supervisor would wedge in env_audit. Use ``shutdown(wait=False)``
-    to detach lingering threads — they're daemon-style and the
-    process can exit while they're still running.
+    survived its 4s ``fut.result(timeout=...)`` call. Use
+    ``shutdown(wait=False, cancel_futures=True)`` so a probe that
+    deadlocks doesn't wedge the supervisor.
     """
+    if not _PROBES:
+        return {}
     out: dict[str, str | None] = {}
     pool = ThreadPoolExecutor(max_workers=len(_PROBES))
     try:
@@ -142,12 +193,9 @@ def audit() -> dict[str, str | None]:
                 out[name] = fut.result(timeout=_PROBE_TIMEOUT_SECS + 1)
             except Exception:
                 out[name] = None
-        # Mark anything we never collected as missing (probe deadlocked).
         for name in _PROBES:
             out.setdefault(name, None)
-    except Exception:
-        # as_completed itself raised TimeoutError — fill remaining
-        # entries with None and bail out without joining stuck threads.
+    except FuturesTimeout:
         for name in _PROBES:
             out.setdefault(name, None)
     finally:
@@ -156,9 +204,9 @@ def audit() -> dict[str, str | None]:
 
 
 def render_brief_block(audit_result: dict[str, str | None]) -> str:
-    """Format the audit dict as a brief-prompt markdown block. Only
-    surfaces what's actually present + what's notably absent for the
-    common task families."""
+    """Format the audit dict as a brief-prompt markdown block. Surfaces
+    what's present + what's notably absent so the orchestrator can
+    pivot the deliverable shape if the obvious path is blocked."""
     if not audit_result:
         return ""
     present = sorted([k for k, v in audit_result.items() if v])
@@ -166,15 +214,23 @@ def render_brief_block(audit_result: dict[str, str | None]) -> str:
     lines = ["## Environment audit (executor's machine)\n"]
     if present:
         lines.append("**Available:** " + ", ".join(
-            f"`{k}={audit_result[k]}`" if isinstance(audit_result[k], str) and len(audit_result[k]) <= 40
-            else f"`{k}`" for k in present
+            f"`{k}={audit_result[k]}`"
+            if isinstance(audit_result[k], str) and len(audit_result[k]) <= 40
+            else f"`{k}`"
+            for k in present
         ))
     if missing:
         lines.append("**Missing:** " + ", ".join(f"`{k}`" for k in missing))
     lines.append("")
     lines.append(
-        "If the deliverable requires a missing toolchain, escalate via the "
-        "ESCALATION/WHY/OPTIONS format with the exact install command — do "
-        "NOT silently fall back to a weaker deliverable."
+        "If the deliverable requires a missing toolchain, escalate via "
+        "the ESCALATION/WHY/OPTIONS format with the exact install command "
+        "— do NOT silently fall back to a weaker deliverable."
     )
     return "\n".join(lines)
+
+
+# Backwards-compat helpers (tests may import these by name).
+def _check_env_var(name: str) -> str | None:
+    """Single-name compatibility shim around _check_env_path."""
+    return _check_env_path(name)

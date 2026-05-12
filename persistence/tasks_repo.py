@@ -33,8 +33,11 @@ def upsert_task(state) -> None:
                                skill_md, skill_name, skill_description, brief, result,
                                started_at, finished_at,
                                cost_databricks_in, cost_databricks_out, cost_claude_usd,
-                               keep_workspace)
-            VALUES (%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s)
+                               keep_workspace, escalation, escalation_set_at,
+                               user_notes, corrections, escalation_answer,
+                               claude_plan, skill_preview)
+            VALUES (%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
+                    %s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s)
             ON CONFLICT (id) DO UPDATE SET
               goal=EXCLUDED.goal, clarifications=EXCLUDED.clarifications,
               workspace=EXCLUDED.workspace, status=EXCLUDED.status,
@@ -45,7 +48,14 @@ def upsert_task(state) -> None:
               cost_databricks_in=EXCLUDED.cost_databricks_in,
               cost_databricks_out=EXCLUDED.cost_databricks_out,
               cost_claude_usd=EXCLUDED.cost_claude_usd,
-              keep_workspace=EXCLUDED.keep_workspace
+              keep_workspace=EXCLUDED.keep_workspace,
+              escalation=EXCLUDED.escalation,
+              escalation_set_at=EXCLUDED.escalation_set_at,
+              user_notes=EXCLUDED.user_notes,
+              corrections=EXCLUDED.corrections,
+              escalation_answer=EXCLUDED.escalation_answer,
+              claude_plan=EXCLUDED.claude_plan,
+              skill_preview=EXCLUDED.skill_preview
             """,
             (
                 state.id, state.goal, json.dumps(state.clarifications),
@@ -59,6 +69,19 @@ def upsert_task(state) -> None:
                 int(getattr(state, "cost_databricks_out", 0) or 0),
                 float(getattr(state, "cost_claude_usd", 0.0) or 0.0),
                 bool(getattr(state, "keep_workspace", False)),
+                # T6 (Phase 3 audit r3): persist escalation state so a
+                # server crash mid-escalation doesn't lose the
+                # structured ESCALATION/WHY/OPTIONS payload.
+                json.dumps(state.escalation) if getattr(state, "escalation", None) else None,
+                getattr(state, "escalation_set_at", None),
+                # T6b: persist the rest of the runtime fields so a
+                # server crash doesn't silently drop user notes,
+                # correction history, or a pending escalation answer.
+                json.dumps(getattr(state, "user_notes", []) or []),
+                json.dumps(getattr(state, "corrections", []) or []),
+                getattr(state, "escalation_answer", None),
+                json.dumps(getattr(state, "claude_plan", []) or []),
+                getattr(state, "skill_preview", "") or "",
             ),
         )
 

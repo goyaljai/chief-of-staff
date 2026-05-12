@@ -1,0 +1,26 @@
+{
+  "_doc": "Data-driven toolchain probe registry. Adding a new probe is a config edit, not a code change. Each entry has: type, name, and type-specific fields. Probe types are documented in services/env_audit.py:_PROBE_TYPES.",
+
+  "probes": [
+    {"type": "version_cmd", "name": "python3",  "args": ["python3",  "--version"]},
+    {"type": "version_cmd", "name": "node",     "args": ["node",     "--version"]},
+    {"type": "version_cmd", "name": "npm",      "args": ["npm",      "--version"]},
+    {"type": "version_cmd", "name": "pnpm",     "args": ["pnpm",     "--version"]},
+    {"type": "version_cmd", "name": "yarn",     "args": ["yarn",     "--version"]},
+    {"type": "version_cmd", "name": "gradle",   "args": ["gradle",   "--version"]},
+    {"type": "version_cmd", "name": "docker",   "args": ["docker",   "--version"]},
+    {"type": "version_cmd", "name": "git",      "args": ["git",      "--version"]},
+    {"type": "version_cmd", "name": "rust",     "args": ["cargo",    "--version"]},
+    {"type": "version_cmd", "name": "go",       "args": ["go",       "version"]},
+
+    {"type": "env_path",  "name": "android_home", "vars": ["ANDROID_HOME", "ANDROID_SDK_ROOT"]},
+    {"type": "env_path",  "name": "java_home",    "vars": ["JAVA_HOME"]},
+    {"type": "env_path",  "name": "gradle_home",  "vars": ["GRADLE_HOME"]},
+    {"type": "env_path",  "name": "nvm_dir",      "vars": ["NVM_DIR"]},
+    {"type": "env_path",  "name": "cargo_home",   "vars": ["CARGO_HOME"]},
+    {"type": "env_path",  "name": "go_path",      "vars": ["GOPATH"]},
+    {"type": "env_path",  "name": "m2_home",      "vars": ["M2_HOME", "MAVEN_HOME"]},
+
+    {"type": "xcode_clt", "name": "xcode"}
+  ]
+}
