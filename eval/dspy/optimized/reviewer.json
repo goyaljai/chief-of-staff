@@ -1,0 +1,42 @@
+{
+  "traces": [],
+  "train": [],
+  "demos": [],
+  "signature": {
+    "instructions": "Independent QA review of an executor's deliverable.\n\nYou did NOT see the brief — only the final workspace state and\nthe executor's own summary. Decide whether the deliverable meets\nthe user's task and declare which workspace files are the\nuser-facing deliverables (G10).\n\nDeliverables rules:\n  - Include only files that fulfil the user's stated task.\n  - Exclude scaffolding (gradlew, build.gradle*, settings.gradle*,\n    package-lock.json, node_modules, *.pyc, __pycache__, .gitignore).\n  - For research / Q&A tasks where the deliverable is a single\n    document, list that one path.\n  - For build tasks where the deliverable is a binary, list the\n    binary itself, not the source files used to produce it.\n  - Empty list is valid for pure-research / inline-answer tasks.\n  - If the user said \"send me X\" and X doesn't exist, set\n    passed=false and deliverables=[].",
+    "fields": [
+      {
+        "prefix": "Task:",
+        "description": "The user's high-level task"
+      },
+      {
+        "prefix": "Brief:",
+        "description": "The brief that was handed to the executor"
+      },
+      {
+        "prefix": "Workspace Listing:",
+        "description": "Final workspace state — relative paths + sizes / notes"
+      },
+      {
+        "prefix": "Executor Summary:",
+        "description": "The executor's own summary of what they produced"
+      },
+      {
+        "prefix": "Passed:",
+        "description": "True iff the deliverable meets the user's task"
+      },
+      {
+        "prefix": "Deliverables:",
+        "description": "Workspace-relative paths the user explicitly cares about"
+      }
+    ]
+  },
+  "lm": null,
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.12",
+      "dspy": "3.1.3",
+      "cloudpickle": "3.1"
+    }
+  }
+}

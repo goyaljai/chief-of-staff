@@ -1,0 +1,18 @@
+[
+  {
+    "name": "question_gen",
+    "before_avg": 1.0,
+    "after_avg": 1.0,
+    "delta_pp": 0.0,
+    "elapsed_s": 59.94484782218933,
+    "out_path": "/Users/jai.goyal/Documents/chief-of-staff/eval/dspy/optimized/question_gen.json"
+  },
+  {
+    "name": "reviewer",
+    "before_avg": 1.0,
+    "after_avg": 1.0,
+    "delta_pp": 0.0,
+    "elapsed_s": 54.35743999481201,
+    "out_path": "/Users/jai.goyal/Documents/chief-of-staff/eval/dspy/optimized/reviewer.json"
+  }
+]
