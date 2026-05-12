@@ -101,6 +101,171 @@ def _is_binary_deliverable(name: str) -> bool:
     return any(n.endswith(s) for s in _BINARY_DELIVERABLE_SUFFIXES)
 
 
+def _parse_brief_deliverables(brief: str) -> list[str]:
+    """Extract the file paths declared under the brief's
+    `## Deliverable file(s)` section.
+
+    Why this exists (audit r3, deeper-fix Approach A): rather than have
+    the supervisor scan the workspace and let the reviewer guess what
+    the deliverable is, we trust the orchestrator's brief — which
+    already names exact deliverable paths — as ground truth. Pass those
+    paths directly to the reviewer (after verifying existence) so the
+    reviewer doesn't have to infer from a sea of artifact lines whether
+    `app-debug.apk` was the user's actual ask.
+
+    Returns a deduped list of paths. Empty when no Deliverables section
+    is present (research / inline-answer tasks).
+    """
+    if not brief:
+        return []
+    lines = brief.splitlines()
+    # Find the section header (any heading level, case-insensitive,
+    # singular or plural, with or without "(s)").
+    in_section = False
+    paths: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^#{1,6}\s*Deliverable(\s+file)?(\(s\))?\s*:?\s*$",
+                    stripped, re.IGNORECASE):
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        # Section ends at the next heading.
+        if re.match(r"^#{1,6}\s+\S", stripped):
+            break
+        m = re.match(r"^[\-\*\+]\s+(.+)$", stripped)
+        if not m:
+            continue
+        candidate = m.group(1).strip()
+        candidate = candidate.strip("`").strip()
+        # Drop trailing "— description" or " - explanation" annotations.
+        candidate = re.split(r"\s+[—–\-]\s+", candidate, maxsplit=1)[0].strip()
+        candidate = candidate.strip("`").strip()
+        if not candidate or candidate.startswith("("):
+            continue
+        # Reject obvious non-paths (parens, sentences, urls).
+        if " " in candidate and "/" not in candidate and "." not in candidate:
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        paths.append(candidate)
+        if len(paths) >= 10:
+            break
+    return paths
+
+
+def _parse_executor_deliverable_marker(task_log: list[dict]) -> list[str]:
+    """Extract Claude's own end-of-run `DELIVERABLE_PATHS: a, b, c`
+    declaration from the task log.
+
+    Approach B (audit r3, deeper-fix): rather than have the supervisor
+    guess what Claude built, the brief instructs Claude to emit a
+    machine-readable marker line at the end of its run naming the
+    user-facing deliverable file(s). When Claude is well-behaved we
+    trust this list as authoritative — it captures what Claude
+    actually produced (which may differ from what the brief originally
+    asked for if the deliverable shape pivoted mid-run, e.g. rust
+    binary → rust source files when the toolchain was missing).
+
+    Returns a deduped list of paths, or [] when no marker was found.
+    Scans the most recent text events first so a re-tried run wins
+    over an aborted earlier attempt's marker.
+    """
+    if not task_log:
+        return []
+    pat = re.compile(
+        r"DELIVERABLE_PATHS\s*[:=]\s*([^\n\r]+)",
+        re.IGNORECASE,
+    )
+    for entry in reversed(task_log):
+        if not isinstance(entry, dict):
+            continue
+        text = entry.get("text") or entry.get("content") or ""
+        if not text or "DELIVERABLE_PATHS" not in text.upper():
+            continue
+        m = pat.search(text)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        # Strip surrounding markdown / quotes / brackets.
+        raw = raw.strip("`").strip("[]").strip()
+        parts = [p.strip().strip("`").strip("'\"") for p in raw.split(",")]
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if not p or p.lower() in ("none", "n/a", "(none)", "[]"):
+                continue
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+            if len(out) >= 10:
+                break
+        return out
+    return []
+
+
+def _render_executor_declared(workspace: Path, paths: list[str]) -> str:
+    """Format Claude's own end-of-run DELIVERABLE_PATHS list + on-disk
+    existence as a markdown block. Reviewer trusts this over its own
+    inference when present."""
+    if not paths:
+        return ""
+    lines = ["## Executor-declared deliverables (DELIVERABLE_PATHS marker — authoritative)"]
+    for p in paths:
+        rel = p.lstrip("/")
+        abs_path = workspace / rel
+        try:
+            if abs_path.is_file():
+                size = abs_path.stat().st_size
+                lines.append(f"- `{rel}` → EXISTS ({size:,} bytes)")
+            elif abs_path.exists():
+                lines.append(f"- `{rel}` → exists but is not a file")
+            else:
+                lines.append(f"- `{rel}` → MISSING from workspace")
+        except Exception as e:
+            lines.append(f"- `{rel}` → check failed: {e}")
+    lines.append(
+        "\nThe executor declared these as the user-facing deliverables. "
+        "Trust this list as authoritative — set `passed=true` and copy "
+        "these paths into `deliverables` when each EXISTS. If any are "
+        "MISSING, set `passed=false` and explain which path is wrong."
+    )
+    return "\n".join(lines)
+
+
+def _render_declared_deliverables(workspace: Path, paths: list[str]) -> str:
+    """Format the brief-declared deliverables + their on-disk existence
+    as a markdown block to append to the reviewer's input. Empty when
+    no paths were declared."""
+    if not paths:
+        return ""
+    lines = ["## Declared deliverables (per brief — ground truth)"]
+    for p in paths:
+        rel = p.lstrip("/")
+        abs_path = workspace / rel
+        try:
+            if abs_path.is_file():
+                size = abs_path.stat().st_size
+                lines.append(f"- `{rel}` → EXISTS ({size:,} bytes)")
+            elif abs_path.exists():
+                lines.append(f"- `{rel}` → exists but is not a file (directory or special)")
+            else:
+                lines.append(f"- `{rel}` → MISSING from workspace")
+        except Exception as e:
+            lines.append(f"- `{rel}` → check failed: {e}")
+    lines.append(
+        "\nThese are the files the brief instructed the executor to "
+        "produce. If they exist, accept them as the deliverable and "
+        "set `passed=true` + `deliverables=[...]` accordingly. If they "
+        "are MISSING, that is a hard fail."
+    )
+    return "\n".join(lines)
+
+
 def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_per_file: int = 60000) -> str:
     """List interesting artifact files in the workspace and inline their content for the reviewer.
 
@@ -625,7 +790,20 @@ class SupervisorLoop:
             STORE.set_status(self.task.id, "reviewing_loop_1")
             full_log = _summarize_log(self.task.log, limit=300, full_text=True)
             artifacts = _list_workspace_artifacts(self.workspace)
-            combined = f"{full_log}\n\nDAG result: {dag_result}\n\n=== Workspace artifacts ===\n{artifacts}"
+            # Approach A: parse the brief's declared deliverables and pass them
+            # to the reviewer as ground truth. Approach B: also surface any
+            # DELIVERABLE_PATHS marker Claude emitted at end-of-run.
+            declared_paths = _parse_brief_deliverables(self.task.brief or "")
+            executor_paths = _parse_executor_deliverable_marker(self.task.log)
+            declared_block = _render_declared_deliverables(self.workspace, declared_paths)
+            executor_block = _render_executor_declared(self.workspace, executor_paths)
+            combined = "\n\n".join(filter(None, [
+                full_log,
+                f"DAG result: {dag_result}",
+                f"=== Workspace artifacts ===\n{artifacts}",
+                declared_block,
+                executor_block,
+            ]))
             review = self.reviewer.final_review(goal=self.task.goal, action_log=combined, workspace=str(self.workspace))
             STORE.append_log(self.task.id, {
                 "kind": "final_review",
@@ -635,11 +813,7 @@ class SupervisorLoop:
                 "deliverables": review.get("deliverables", []),
             })
             if review["passed"] and not self.task.user_notes:
-                STORE.set_status(self.task.id, "done")
-                self._write_learning(1, review)
-                self._index_in_rag(review)
-                self._maybe_upload_trace(review)
-                STORE.unregister_runner(self.task.id)
+                # Same ordering fix — see audit r3 ordering note above.
                 self.task.result = {
                     "success": True,
                     "summary": review["summary"],
@@ -649,6 +823,11 @@ class SupervisorLoop:
                     "execution": "dag_parallel",
                     "workspace": str(self.workspace),
                 }
+                STORE.set_status(self.task.id, "done")
+                self._write_learning(1, review)
+                self._index_in_rag(review)
+                self._maybe_upload_trace(review)
+                STORE.unregister_runner(self.task.id)
                 return
             elif review["passed"]:
                 # DAG passed BUT the user added notes mid-flight (e.g. "make
@@ -777,7 +956,20 @@ class SupervisorLoop:
             STORE.set_status(self.task.id, f"reviewing_loop_{loop_num}")
             full_log = _summarize_log(self.task.log, limit=300, full_text=True)
             artifacts = _list_workspace_artifacts(self.workspace)
-            combined = f"{full_log}\n\n=== Workspace artifacts (actual files) ===\n{artifacts}"
+            # Approach A + B (audit r3 deeper-fix): pass brief-declared and
+            # executor-declared deliverables as ground truth so the reviewer
+            # doesn't have to infer what was the deliverable from a sea of
+            # workspace artifacts.
+            declared_paths = _parse_brief_deliverables(self.task.brief or "")
+            executor_paths = _parse_executor_deliverable_marker(self.task.log)
+            declared_block = _render_declared_deliverables(self.workspace, declared_paths)
+            executor_block = _render_executor_declared(self.workspace, executor_paths)
+            combined = "\n\n".join(filter(None, [
+                full_log,
+                f"=== Workspace artifacts (actual files) ===\n{artifacts}",
+                declared_block,
+                executor_block,
+            ]))
             review = self.reviewer.final_review(
                 goal=self.task.goal,
                 action_log=combined,
@@ -793,10 +985,12 @@ class SupervisorLoop:
             })
 
             if review["passed"]:
-                STORE.set_status(self.task.id, "done")
-                self._write_learning(loop_num, review)
-                self._index_in_rag(review)
-                STORE.unregister_runner(self.task.id)
+                # Bug fix (Phase 3 audit r3, ordering): assign result
+                # BEFORE set_status. set_status calls _persist; if the
+                # result is set after, the DB row keeps result=NULL and
+                # post-restart hydration loses the deliverables list +
+                # summary. Same fix at the DAG-pass and best-effort
+                # paths below.
                 self.task.result = {
                     "success": True,
                     "summary": review["summary"],
@@ -806,6 +1000,10 @@ class SupervisorLoop:
                     "corrections_made": len(self.task.corrections),
                     "workspace": str(self.workspace),
                 }
+                STORE.set_status(self.task.id, "done")
+                self._write_learning(loop_num, review)
+                self._index_in_rag(review)
+                STORE.unregister_runner(self.task.id)
                 self._maybe_upload_trace(review)
                 return
 
@@ -818,10 +1016,7 @@ class SupervisorLoop:
                 STORE.append_log(self.task.id, {"kind": "notes_consumed", "notes": user_notes})
 
             if loop_num == MAX_CORRECTION_LOOPS:
-                STORE.set_status(self.task.id, "failed")
-                self._write_learning(loop_num, review)
-                self._index_in_rag(review)
-                STORE.unregister_runner(self.task.id)
+                # Same ordering fix — see audit r3 ordering note above.
                 self.task.result = {
                     "success": False,
                     "best_effort": True,
@@ -831,6 +1026,10 @@ class SupervisorLoop:
                     "loops": loop_num,
                     "workspace": str(self.workspace),
                 }
+                STORE.set_status(self.task.id, "failed")
+                self._write_learning(loop_num, review)
+                self._index_in_rag(review)
+                STORE.unregister_runner(self.task.id)
                 return
 
             grounding = ""
