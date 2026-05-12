@@ -329,6 +329,60 @@ def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_pe
     return "\n\n".join(lines)
 
 
+def _classify_install_risk(option_a: str) -> str:
+    """Classify the install-command in option_a as 'low' or 'high' risk.
+
+    Low-risk = a single, well-known package-manager invocation that
+    completes in seconds-to-a-minute, doesn't require sudo, doesn't
+    require license acceptance, and is easily reversible. The
+    supervisor's auto-resolve path (gated by
+    ``COS_AUTO_RESOLVE_ESCALATIONS=1``) will pick option_a without
+    paging the user when this returns 'low'.
+
+    High-risk = anything sudo / multi-GB / license-prompted / long /
+    sweeping (Android SDK, Xcode CLT install, anything writing to
+    /etc, anything piping curl into shell). The user must approve.
+
+    Conservative — defaults to 'high' on anything ambiguous so the
+    user is never surprised by an autonomous install they didn't
+    expect.
+    """
+    if not option_a:
+        return "high"
+    s = option_a.lower()
+    # Hard-deny: anything sudo / system-modifying / license-prompted.
+    high_risk_markers = (
+        "sudo ",
+        "apt-get ", "apt install", "yum ", "dnf ",
+        "pacman -", "zypper ",
+        "softwareupdate ",
+        "xcode-select --install",
+        "android-commandlinetools", "android-sdk", "androidsdk",
+        "/etc/", "license", "accept",
+        "curl ", "wget ",  # raw curl|sh isn't whitelisted even though brew uses it internally
+        "rm -rf",
+    )
+    if any(m in s for m in high_risk_markers):
+        return "high"
+    # Allow-list: known low-risk single-package installers.
+    low_risk_markers = (
+        "brew install ",
+        "brew tap",
+        "npm install -g ", "npm i -g ",
+        "pnpm add -g ", "yarn global add",
+        "pip install ", "pip3 install ", "python3 -m pip install ",
+        "pipx install ",
+        "cargo install ",
+        "go install ",
+        "rustup ",
+        "nvm install ",
+        "asdf install ",
+    )
+    if any(m in s for m in low_risk_markers):
+        return "low"
+    return "high"
+
+
 def _parse_escalation(message: str) -> dict:
     """Parse a free-text or structured escalation into a typed dict.
 
@@ -417,6 +471,13 @@ def _parse_escalation(message: str) -> dict:
     )
     is_structured_env = bool(escalation_header) and bool(why_block) and has_options
     if is_structured_env or option_abort:
+        # B (Phase 4 cost / autonomy): classify whether the install
+        # path in option_a is low-risk enough that the orchestrator
+        # could auto-resolve without paging the user. Surfaced as a
+        # field; the actual "auto-resolve without asking" behavior is
+        # gated by COS_AUTO_RESOLVE_ESCALATIONS env flag (default off)
+        # and the UI uses this to render a "🚀 Auto-fix" suggestion.
+        risk = _classify_install_risk(option_a)
         return {
             "kind": "environment",
             "question": text,
@@ -425,6 +486,8 @@ def _parse_escalation(message: str) -> dict:
             "option_a": option_a,
             "option_b": option_b,
             "option_abort": option_abort or "Cancel the task — env can't produce what was asked",
+            "auto_resolvable": risk == "low",
+            "risk": risk,
         }
 
     return {
@@ -934,7 +997,34 @@ class SupervisorLoop:
                 break  # no mid-stream coach pending — fall through to review
 
             if result.cost_usd:
-                STORE.add_cost(self.task.id, claude_usd=float(result.cost_usd))
+                # PHK3 (Phase 3.5 hardening): hard-stop the task when
+                # cumulative spend exceeds COS_MAX_TASK_USD (default
+                # $25). A stuck Claude could otherwise burn unbounded
+                # spend silently. add_cost returns False when the cap
+                # is breached.
+                if not STORE.add_cost(self.task.id, claude_usd=float(result.cost_usd)):
+                    STORE.append_log(self.task.id, {
+                        "kind": "runaway_cost_stop",
+                        "cost_usd": self.task.cost_claude_usd,
+                    })
+                    self.task.result = {
+                        "success": False,
+                        "error": (
+                            f"Task halted: cumulative Claude spend "
+                            f"${self.task.cost_claude_usd:.2f} exceeded "
+                            f"COS_MAX_TASK_USD cap. "
+                            f"Set COS_MAX_TASK_USD=0 to disable, or "
+                            f"raise the cap to retry."
+                        ),
+                        "cost_claude_usd": self.task.cost_claude_usd,
+                    }
+                    STORE.set_status(self.task.id, "failed")
+                    try:
+                        self.runner.interrupt()
+                    except Exception:
+                        pass
+                    STORE.unregister_runner(self.task.id)
+                    return
 
             for entry in _read_hook_log(self.hook_log):
                 STORE.append_log(self.task.id, {"kind": "hook", **entry})

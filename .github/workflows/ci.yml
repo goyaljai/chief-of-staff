@@ -91,6 +91,9 @@ jobs:
       - name: skill_lessons B2/B3 tests
         run: python eval/test_skill_lessons.py
 
+      - name: schema-drift check (TaskState ↔ tasks ↔ upsert ↔ hydration)
+        run: python eval/test_schema_drift.py
+
   promptfoo-gate:
     # T5: per-PR fast prompt-eval gate. Runs the orchestrator + reviewer
     # prompts in isolation against curated cases (no Claude executor).

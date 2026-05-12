@@ -1,0 +1,21 @@
+{
+  "family": "research",
+  "n": 1,
+  "common_acceptance": [
+    "report saved to the requested filename",
+    "covers all requested items (e.g., 5 varieties)",
+    "substantial prose content, not just bullet stubs",
+    "file located in the correct workspace path",
+    "content directly addresses the research topic",
+    "well-structured with clear sections or headings"
+  ],
+  "common_gotchas": [
+    "wrong filename or extension used",
+    "fewer items covered than requested",
+    "thin or placeholder content",
+    "file saved outside the workspace",
+    "off-topic or generic filler text",
+    "missing citations or sources",
+    "duplicate or repeated sections"
+  ]
+}

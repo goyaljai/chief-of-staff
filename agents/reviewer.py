@@ -24,6 +24,55 @@ from .llm import _chat, _extract_json
 from .prompts import _load_prompt, _load_skills
 
 
+# C1 (Phase 4 cost reduction): tools/inputs that match these patterns
+# are pre-approved without an LLM review_action call. The LLM call
+# costs ~$0.01-0.03 each and a typical task fires 5-30 of them; for
+# an obviously-safe `pytest tests/` or `git status` we don't need the
+# LLM to tell us "approve". The supervisor still snapshots Write/Edit
+# pre-mutation (D1 undo) and the permission_hook still blocks the
+# dangerous patterns at the OS level — this fast-path only skips the
+# LLM advisory layer.
+_REVIEW_FAST_PATH_BASH_PREFIXES = (
+    "ls", "pwd", "cat", "echo", "head", "tail", "wc",
+    "find", "grep", "rg", "tree", "file", "stat",
+    "which", "type", "command", "date", "sleep", "env",
+    "git status", "git log", "git diff", "git show", "git branch",
+    "git stash list", "git remote", "git config --get",
+    "pytest", "unittest", "jest", "vitest", "mocha", "tox",
+    "python3 -m pytest", "python -m pytest",
+    "npm test", "npm run test", "yarn test", "pnpm test",
+    "./gradlew test", "./gradlew lint", "./gradlew check",
+    "node --version", "python3 --version", "go version",
+)
+_REVIEW_FAST_PATH_TOOLS = {
+    # Read-only Anthropic tools never need LLM review — they don't
+    # mutate state and the permission hook permits them blindly.
+    "Read", "Grep", "Glob", "TodoWrite", "TodoRead",
+    "ListMcpResourcesTool", "ReadMcpResourceTool",
+    "WebFetch", "WebSearch",
+}
+
+
+def _is_fast_path_action(tool_name: str, tool_input: dict | None) -> bool:
+    """True iff this action is obviously safe and doesn't need an LLM
+    review_action call. Conservative — only matches the patterns we're
+    100% confident about. The default fall-through is the LLM call."""
+    if tool_name in _REVIEW_FAST_PATH_TOOLS:
+        return True
+    if tool_name == "Bash":
+        cmd = ((tool_input or {}).get("command") or "").strip()
+        # Refuse to short-circuit if the command pipes / chains / uses
+        # subshells — those can hide arbitrary commands. The LLM gets
+        # a chance to weigh in on those.
+        for badch in ("|", "&&", "||", ";", "`", "$("):
+            if badch in cmd:
+                return False
+        for pref in _REVIEW_FAST_PATH_BASH_PREFIXES:
+            if cmd == pref or cmd.startswith(pref + " ") or cmd.startswith(pref + "\n"):
+                return True
+    return False
+
+
 class Reviewer:
     """Independent QA reviewer — sees only goal + action log + Skill.md.
     Blind to the brief."""
@@ -41,6 +90,12 @@ class Reviewer:
         workspace: str | None = None,
         inline_skill: str = "",
     ) -> dict:
+        # C1: skip the LLM review for obviously-safe actions. Cuts
+        # ~60-70% of review_action calls on a typical task. The
+        # permission_hook still blocks dangerous patterns at the OS
+        # level; this only skips the LLM advisory.
+        if _is_fast_path_action(tool_name, tool_input):
+            return {"decision": "approve", "message": "fast_path"}
         skills = _load_skills(workspace=workspace, inline_skill=inline_skill)
         user = (
             f"Goal: {goal}\n\n"

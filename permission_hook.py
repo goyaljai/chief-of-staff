@@ -142,6 +142,8 @@ BASH_ALWAYS_ALLOW_PREFIXES = (
     "make", "cmake",
     "which", "type", "command",
     "date", "sleep", "env", "export",
+    # Test runners — common, low-risk, deterministic.
+    "pytest", "unittest", "jest", "vitest", "mocha", "tox",
 )
 
 BASH_HARD_DENY_PATTERNS = (

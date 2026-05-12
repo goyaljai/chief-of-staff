@@ -1,0 +1,21 @@
+{
+  "family": "code",
+  "n": 2,
+  "common_acceptance": [
+    "file exists at the specified path in workspace",
+    "script runs without errors",
+    "output matches expected text exactly",
+    "CLI accepts the specified arguments",
+    "produces only the requested artifact, nothing extra",
+    "logic covers the full requested range/cases"
+  ],
+  "common_gotchas": [
+    "file written to wrong location or not saved",
+    "extra files or unrequested code created",
+    "script not actually executed to verify",
+    "output format off (punctuation, casing, newline)",
+    "missing argument parsing or wrong flag name",
+    "hardcoded values instead of using CLI input",
+    "off-by-one errors in ranges"
+  ]
+}

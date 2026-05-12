@@ -22,6 +22,7 @@ Public API:
 """
 import asyncio
 import json
+import os
 import time
 import threading
 import uuid
@@ -289,13 +290,25 @@ class TaskStore:
         self._persist(s)
         return True
 
-    def add_cost(self, tid: str, in_tokens: int = 0, out_tokens: int = 0, claude_usd: float = 0.0):
+    def add_cost(self, tid: str, in_tokens: int = 0, out_tokens: int = 0, claude_usd: float = 0.0) -> bool:
+        """Increment per-task cost counters. Returns True normally;
+        returns False when the task has crossed the runaway-cost cap
+        (PHK3) so the supervisor can hard-stop instead of grinding to
+        infinity. Cap is read from ``COS_MAX_TASK_USD`` (default 25.0).
+        Set to 0 to disable the guardrail."""
         s = self._tasks.get(tid)
         if not s:
-            return
+            return True
         s.cost_databricks_in += in_tokens
         s.cost_databricks_out += out_tokens
         s.cost_claude_usd += claude_usd
+        try:
+            cap = float(os.environ.get("COS_MAX_TASK_USD", "25.0") or "25.0")
+        except ValueError:
+            cap = 25.0
+        if cap > 0 and s.cost_claude_usd >= cap:
+            return False
+        return True
 
     def subscribe(self, tid: str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=500)
