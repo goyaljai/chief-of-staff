@@ -8,3 +8,8 @@ __pycache__/
 .vscode/
 .idea/
 data/
+
+# T5: Promptfoo run outputs are per-CI-run; baseline.json is the only
+# tracked artifact in eval/promptfoo/.
+eval/promptfoo/run-*.json
+eval/promptfoo/run.json

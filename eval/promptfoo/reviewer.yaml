@@ -1,0 +1,118 @@
+description: |
+  Reviewer final-review prompt eval (T5).
+
+  Tests in isolation that the reviewer:
+    1. Flags vacuous (TODO-only) deliverables as failed.
+    2. Accepts a real, working deliverable.
+    3. Declares the right deliverables (G10) on a research task.
+    4. Skips scaffolding noise (gradlew, build.gradle) on a build task.
+
+prompts:
+  - file://prompts/reviewer-final-review.txt
+
+providers:
+  - id: 'https://{{env.DATABRICKS_HOST_NO_SCHEME}}/ai-gateway/mlflow/v1/chat/completions'
+    label: databricks-opus-4-7
+    config:
+      method: POST
+      headers:
+        'Authorization': 'Bearer {{env.DATABRICKS_TOKEN}}'
+        'Content-Type': 'application/json'
+      body:
+        model: databricks-claude-opus-4-7
+        messages:
+          - role: user
+            content: '{{prompt}}'
+        max_tokens: 2048
+      transformResponse: 'json.choices[0].message.content'
+
+defaultTest:
+  options:
+    cache: true
+
+tests:
+  - description: 'Reviewer flags vacuous deliverable as fail'
+    vars:
+      task: 'build a Python CLI calculator that supports + - * /'
+      brief: 'Build calc.py supporting + - * /. Verify: python3 calc.py "1+2" prints 3'
+      workspace_listing: |
+        - calc.py (4 lines, prints "TODO")
+      executor_summary: 'I created calc.py with a TODO comment.'
+    assert:
+      - type: javascript
+        value: |
+          let s = output.trim();
+          s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+          try {
+            const j = JSON.parse(s);
+            if (j.passed === false) return true;
+            return "Reviewer rubber-stamped a TODO-only deliverable";
+          } catch (e) { return "Reviewer output not JSON: " + e.message; }
+
+  - description: 'Reviewer accepts a real, working deliverable'
+    vars:
+      task: 'build a Python CLI calculator that supports + - * /'
+      brief: 'Build calc.py supporting + - * /. Verify: python3 calc.py "1+2" prints 3'
+      workspace_listing: |
+        - calc.py (45 lines, full recursive-descent parser, handles + - * / and parens)
+      executor_summary: |
+        Created calc.py with a Pratt parser supporting + - * / and parens.
+        Verified: python3 calc.py "1+2*3" → 7, python3 calc.py "(1+2)*3" → 9.
+    assert:
+      - type: javascript
+        value: |
+          let s = output.trim();
+          s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+          try {
+            const j = JSON.parse(s);
+            if (j.passed === true) return true;
+            return "Reviewer rejected a working deliverable";
+          } catch (e) { return "Reviewer output not JSON: " + e.message; }
+
+  - description: 'Reviewer declares deliverables (G10) on a research task'
+    vars:
+      task: 'research the 5 best mango varieties grown in India'
+      brief: |
+        Research and produce a markdown report at `mango_report.md`
+        listing 5 mango varieties with provenance + flavor notes.
+      workspace_listing: |
+        - mango_report.md (3 KB, 5 varieties with sources)
+      executor_summary: 'Wrote mango_report.md. Listed Alphonso, Kesar, Dasheri, Langra, Chausa with regions + notes.'
+    assert:
+      - type: javascript
+        value: |
+          let s = output.trim();
+          s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+          try {
+            const j = JSON.parse(s);
+            const d = j.deliverables || [];
+            if (Array.isArray(d) && d.length === 1 && d[0].includes("mango_report")) return true;
+            return "deliverables should be ['mango_report.md'], got " + JSON.stringify(d);
+          } catch (e) { return "Reviewer output not JSON: " + e.message; }
+
+  - description: 'Reviewer skips scaffolding noise from deliverables'
+    vars:
+      task: 'build a hello-world Android app'
+      brief: |
+        Scaffold an Android app and produce app-debug.apk via
+        `./gradlew assembleDebug`. Deliverable: the APK file.
+      workspace_listing: |
+        - gradlew (script)
+        - gradle/wrapper/...
+        - app/build/outputs/apk/debug/app-debug.apk (3.4 MB)
+        - settings.gradle.kts
+        - build.gradle.kts
+      executor_summary: 'Scaffolded app, ran ./gradlew assembleDebug. APK at app/build/outputs/apk/debug/app-debug.apk.'
+    assert:
+      - type: javascript
+        value: |
+          let s = output.trim();
+          s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+          try {
+            const j = JSON.parse(s);
+            const d = j.deliverables || [];
+            const hasApk = d.some(x => x.includes("app-debug.apk"));
+            const hasNoise = d.some(x => /gradlew|settings\.gradle|build\.gradle/.test(x));
+            if (hasApk && !hasNoise) return true;
+            return "deliverables wrong — got " + JSON.stringify(d);
+          } catch (e) { return "Reviewer output not JSON: " + e.message; }

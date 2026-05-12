@@ -1,0 +1,62 @@
+description: |
+  Orchestrator question-gen prompt eval (T5).
+
+  Tests in isolation that the question-gen prompt:
+    1. Probes a real ambiguity when the task is vague.
+    2. Short-circuits with done=true when the task is fully specified.
+
+prompts:
+  - file://prompts/orchestrator-question-gen.txt
+
+providers:
+  - id: 'https://{{env.DATABRICKS_HOST_NO_SCHEME}}/ai-gateway/mlflow/v1/chat/completions'
+    label: databricks-opus-4-7
+    config:
+      method: POST
+      headers:
+        'Authorization': 'Bearer {{env.DATABRICKS_TOKEN}}'
+        'Content-Type': 'application/json'
+      body:
+        model: databricks-claude-opus-4-7
+        messages:
+          - role: user
+            content: '{{prompt}}'
+        max_tokens: 2048
+      transformResponse: 'json.choices[0].message.content'
+
+defaultTest:
+  options:
+    cache: true
+
+tests:
+  - description: 'Q-gen surfaces a real ambiguity for a vague task'
+    vars:
+      task: 'build a Python CLI calculator. supports + - * /'
+      answers_so_far: '{}'
+    assert:
+      - type: javascript
+        value: |
+          const out = output.toLowerCase();
+          const ok = /file|name|deliver|operator|stdlib|dep|test|verif/.test(out);
+          return ok ? true : "Question doesn't probe a real ambiguity";
+
+  - description: 'Q-gen short-circuits when prompt is fully specified'
+    vars:
+      task: |
+        Write a single python file `fizzbuzz.py` in the workspace root.
+        Print fizzbuzz 1-15. Use only the python stdlib. Verification:
+        `python3 fizzbuzz.py` prints exactly 15 lines.
+      answers_so_far: '{}'
+    assert:
+      - type: javascript
+        value: |
+          let s = output.trim();
+          s = s.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+          try {
+            const j = JSON.parse(s);
+            if (j.done === true) return true;
+            if ((j.questions || []).length <= 1) return true;
+            return "Over-questioned a fully specified prompt";
+          } catch (e) {
+            return "Output isn't valid JSON: " + e.message;
+          }

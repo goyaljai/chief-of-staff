@@ -89,6 +89,41 @@ jobs:
       - name: skill_lessons B2/B3 tests
         run: python eval/test_skill_lessons.py
 
+  promptfoo-gate:
+    # T5: per-PR fast prompt-eval gate. Runs the orchestrator + reviewer
+    # prompts in isolation against curated cases (no Claude executor).
+    # Fails the build if pass-rate drops more than 5 pp from baseline.
+    # Skips on PRs from forks because secrets aren't available there.
+    name: promptfoo prompt eval (T5)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    env:
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_HOST_NO_SCHEME: ${{ secrets.DATABRICKS_HOST_NO_SCHEME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install promptfoo
+        run: npm install -g promptfoo@latest
+      - name: run orchestrator prompt eval
+        working-directory: eval/promptfoo
+        run: promptfoo eval -c orchestrator.yaml --output run-orchestrator.json --no-write --max-concurrency 2
+      - name: run reviewer prompt eval
+        working-directory: eval/promptfoo
+        run: promptfoo eval -c reviewer.yaml --output run-reviewer.json --no-write --max-concurrency 2
+      - name: gate pass-rate against baseline
+        run: |
+          python eval/promptfoo/check_pass_rate.py \
+            --baseline eval/promptfoo/baseline.json \
+            --run eval/promptfoo/run-orchestrator.json \
+            --run eval/promptfoo/run-reviewer.json \
+            --tolerance 5
+
   fast-eval:
     name: fast eval subset (smoke, manual)
     runs-on: ubuntu-latest
