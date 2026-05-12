@@ -50,6 +50,24 @@ _REVIEW_FAST_PATH_TOOLS = {
     "Read", "Grep", "Glob", "TodoWrite", "TodoRead",
     "ListMcpResourcesTool", "ReadMcpResourceTool",
     "WebFetch", "WebSearch",
+    # Bug fix (post-Phase-4 audit): the user's global CLAUDE.md
+    # routes everything through the glance-token-saver MCP wrappers.
+    # Without these, C1 fast-path NEVER fires in real traffic — the
+    # measured Databricks task cost stayed flat at $0.24 because 29/35
+    # review_actions were going through `mcp__...__bash_compressed`
+    # not native `Bash`. The MCP read/grep wrappers are functionally
+    # identical to their native counterparts; safe to fast-path.
+    "mcp__glance-token-saver__read_compressed",
+    "mcp__glance-token-saver__grep_compressed",
+}
+
+# Bash-equivalent MCP tools whose `command` payload should be safelist-
+# matched the same way as native Bash. write_file / edit_file are
+# explicitly NOT in this set — mutations always go through the LLM
+# advisory (matches the Write/Edit native tools).
+_REVIEW_FAST_PATH_BASH_LIKE_TOOLS = {
+    "Bash",
+    "mcp__glance-token-saver__bash_compressed",
 }
 
 
@@ -59,7 +77,7 @@ def _is_fast_path_action(tool_name: str, tool_input: dict | None) -> bool:
     100% confident about. The default fall-through is the LLM call."""
     if tool_name in _REVIEW_FAST_PATH_TOOLS:
         return True
-    if tool_name == "Bash":
+    if tool_name in _REVIEW_FAST_PATH_BASH_LIKE_TOOLS:
         cmd = ((tool_input or {}).get("command") or "").strip()
         # Refuse to short-circuit if the command pipes / chains / uses
         # subshells — those can hide arbitrary commands. The LLM gets

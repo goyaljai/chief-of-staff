@@ -33,6 +33,46 @@ from .events import ClaudeEvent, TaskResult
 from .hooks import install_hooks
 
 
+# Claude Opus 4.7 list pricing as of 2026-05. Update if model rates
+# change. Cache-read is heavily discounted vs. fresh input. The
+# computed value is an estimate; the authoritative source remains
+# `total_cost_usd` when the CLI emits it.
+_USD_PER_MTOK_INPUT = 5.00
+_USD_PER_MTOK_OUTPUT = 25.00
+_USD_PER_MTOK_CACHE_WRITE = 6.25  # 1.25x input
+_USD_PER_MTOK_CACHE_READ = 0.50   # 0.1x input
+
+
+def _compute_usd_from_usage(usage: dict) -> float | None:
+    """Estimate Claude API spend from a usage block (Claude Code 2.x
+    final result event). Returns None on missing/malformed input so the
+    caller can leave cost_usd unset rather than logging $0.
+
+    Why we need this: older Claude CLIs emitted `cost_usd` directly;
+    newer ones (2.x) only emit token counts in a `usage` dict. Without
+    this conversion, tasks.cost_claude_usd stays $0 and the executor
+    side of cost is invisible — exactly what surfaced post-Phase-4.
+    """
+    if not isinstance(usage, dict):
+        return None
+    try:
+        in_tok = int(usage.get("input_tokens", 0) or 0)
+        out_tok = int(usage.get("output_tokens", 0) or 0)
+        cache_w = int(usage.get("cache_creation_input_tokens", 0) or 0)
+        cache_r = int(usage.get("cache_read_input_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if in_tok + out_tok + cache_w + cache_r == 0:
+        return None
+    usd = (
+        (in_tok / 1_000_000) * _USD_PER_MTOK_INPUT
+        + (out_tok / 1_000_000) * _USD_PER_MTOK_OUTPUT
+        + (cache_w / 1_000_000) * _USD_PER_MTOK_CACHE_WRITE
+        + (cache_r / 1_000_000) * _USD_PER_MTOK_CACHE_READ
+    )
+    return round(usd, 4)
+
+
 class ClaudeRunner:
     """Headless Claude Code via the `claude` CLI. Streams events.
     Supports interrupt() and --resume."""
@@ -108,8 +148,22 @@ class ClaudeRunner:
             events.append(event)
             if event.type == "result":
                 output_lines.append(event.text or "")
-                if "cost_usd" in data:
-                    cost_usd = data["cost_usd"]
+                # Bug fix (post-Phase-4 audit): older Claude CLIs emit
+                # `cost_usd` directly; Claude Code 2.x emits
+                # `total_cost_usd` and/or a `usage` block with token
+                # counts. We were ONLY checking the legacy field, so
+                # production capture was always None and tasks.
+                # cost_claude_usd stayed $0 — making executor cost
+                # invisible in observability. Try fields in order:
+                # total_cost_usd → cost_usd → compute from usage tokens.
+                if "total_cost_usd" in data and data["total_cost_usd"] is not None:
+                    cost_usd = float(data["total_cost_usd"])
+                elif "cost_usd" in data and data["cost_usd"] is not None:
+                    cost_usd = float(data["cost_usd"])
+                else:
+                    usage = data.get("usage") or {}
+                    if isinstance(usage, dict) and usage:
+                        cost_usd = _compute_usd_from_usage(usage)
             if on_event:
                 try:
                     # #83: support async on_event handlers. The supervisor's

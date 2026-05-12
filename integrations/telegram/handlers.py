@@ -284,14 +284,21 @@ async def _launch(update: Update, context: ContextTypes.DEFAULT_TYPE, task: str,
     for k in ("questions", "answers", "q_index", "task_text", "pending_question"):
         context.chat_data.pop(k, None)
 
+    # Live-task UI cleanup (Phase 4 polish): one short started message
+    # instead of two verbose paragraphs. The 'new:' / /reset hint moves
+    # to /help — users see it once when they /start the bot, not every
+    # task. Keeps chat lean.
     await context.bot.send_message(
         chat_id,
-        f"Started task {task_id}. I'll ping you when there's news.\n\n"
-        "(reply with 'new: <prompt>' or /reset to start a fresh task — anything "
-        "else gets folded into the current task as a note)",
+        f"🚀 Task `{task_id}` started — I'll ping when done or if I need you.",
+        parse_mode="Markdown",
     )
 
-    asyncio.create_task(_send_action_line(context, chat_id, task_id))
+    # Live-task UI cleanup: drop the standalone "What I'll do:" message
+    # entirely. The brief and skill name are visible in the dashboard;
+    # in chat the user just wants progress + result. Keep _poll_task
+    # which now emits a single milestone summary instead of per-step
+    # noise.
     asyncio.create_task(_poll_task(context, chat_id, task_id))
 
 

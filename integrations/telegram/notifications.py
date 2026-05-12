@@ -103,49 +103,35 @@ async def _poll_task(context: ContextTypes.DEFAULT_TYPE, chat_id: int, task_id: 
 
         status = state.get("status", "")
 
+        # Live-task UI cleanup: a real Telegram task showed 15+ messages
+        # (per-step started + completed pairs, "🔍 Reviewing...", "🛠️
+        # Running parallel build steps...", per-loop status pings). User
+        # only needs: started (sent at task creation), maybe ONE
+        # mid-flight "applying corrections" if a fresh loop is needed,
+        # escalation if any, and the completion message. Everything
+        # else is noise. Drop the per-step + per-status spam.
         if status != last_status:
             last_status = status
-            if status.startswith("reviewing_"):
-                await context.bot.send_message(
-                    chat_id,
-                    f"🔍 Reviewing {status.replace('reviewing_', '')}...",
-                )
-            elif status.startswith("executing_loop_") and status != "executing_loop_1":
+            # Only emit a status message for correction loops past the
+            # first — that's a meaningful "I noticed something wrong
+            # and I'm fixing it" signal. Reviewing / executing_dag /
+            # executing_loop_1 transitions are silent.
+            if status.startswith("executing_loop_") and status != "executing_loop_1":
                 loop_n = status.split("_")[-1]
                 await context.bot.send_message(
                     chat_id,
-                    f"🔄 Starting correction loop {loop_n}...",
+                    f"🔄 Applying corrections (loop {loop_n})…",
                 )
-            elif status == "executing_dag":
-                await context.bot.send_message(
-                    chat_id,
-                    "🛠️ Running parallel build steps — I'll narrate progress as steps land.",
-                )
-
-        # Bug #4 fix: announce DAG step transitions even when the umbrella
-        # status doesn't change. dag_progress is a {step_id: {count, last}}
-        # map; "started" = first time we see it, "done" = a 'result' event.
-        dag_progress = state.get("dag_progress") or {}
-        for step_id, p in dag_progress.items():
-            if step_id not in announced_started and p.get("count", 0) > 0:
+        # Track step ids without emitting per-step messages — kept so
+        # a future "live progress bar" feature has the seed.
+        for step_id, p in (state.get("dag_progress") or {}).items():
+            if p.get("count", 0) > 0:
                 announced_started.add(step_id)
-                last_text = (p.get("last") or "").strip().split("\n")[0][:140]
-                tail = f" — {last_text}" if last_text else ""
-                await context.bot.send_message(
-                    chat_id, f"▶️ Step `{step_id}` started{tail}",
-                )
-        # Find dag_step_event entries with event_type=result for completion.
         for e in (state.get("log_tail") or []):
             if (e.get("kind") == "dag_step_event"
                     and e.get("event_type") == "result"
-                    and e.get("step_id")
-                    and e["step_id"] not in announced_done):
+                    and e.get("step_id")):
                 announced_done.add(e["step_id"])
-                tail = (e.get("text") or "").strip().split("\n")[0][:140]
-                tailmsg = f" — {tail}" if tail else ""
-                await context.bot.send_message(
-                    chat_id, f"✅ Step `{e['step_id']}` completed{tailmsg}",
-                )
 
         if status == "escalated":
             esc = state.get("escalation") or {}
