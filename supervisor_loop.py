@@ -75,29 +75,84 @@ def _summarize_log(log: list[dict], limit: int = 80, full_text: bool = False) ->
     return "\n".join(lines) or "(no actions)"
 
 
+# Binary artifacts whose final-output presence is itself the deliverable
+# for many task families — APK / IPA / JAR / WAR / archive / PDF / etc.
+# These get listed as `path (Nbytes, binary)` regardless of whether their
+# directory is on the noise skip-list. Without this, an Android task's
+# real APK at `app/build/outputs/apk/debug/app-debug.apk` would be hidden
+# from the reviewer (which lives in skip_dir_names → "build") and the
+# reviewer would correctly but unhelpfully reject the task with "APK
+# missing" while the binary was sitting on disk the whole time.
+_BINARY_DELIVERABLE_SUFFIXES = {
+    ".apk", ".aab", ".ipa", ".jar", ".war", ".dmg", ".pkg",
+    ".zip", ".tar", ".tgz", ".tar.gz",
+    ".pdf", ".epub",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+    ".mp4", ".mov", ".m4a", ".mp3", ".wav",
+    ".so", ".dylib", ".dll", ".exe",
+    ".whl", ".gem",
+}
+
+
+def _is_binary_deliverable(name: str) -> bool:
+    n = name.lower()
+    if n.endswith(".tar.gz"):
+        return True
+    return any(n.endswith(s) for s in _BINARY_DELIVERABLE_SUFFIXES)
+
+
 def _list_workspace_artifacts(workspace: Path, max_files: int = 30, max_bytes_per_file: int = 60000) -> str:
     """List interesting artifact files in the workspace and inline their content for the reviewer.
+
     V3 bug fix #1: cap raised from 8KB to 60KB so medium-sized markdown/code files aren't truncated.
     V3 bug fix #2: max_files raised 8 → 30. Android projects have 15-25 files; truncating at 8
     caused reviewer to say 'MainActivity.kt missing' when only gradle config files showed up.
-    Skips skills/, .claude/, hidden dirs, and known build noise."""
+    Skips skills/, .claude/, hidden dirs, and known build noise.
+
+    Bug fix (Phase 3 audit r3, build-output): the skip list contains
+    ``build`` to keep gradle/webpack intermediates out of the reviewer's
+    window, but on Android tasks the actual APK lives at
+    ``app/build/outputs/apk/debug/app-debug.apk`` — under ``build`` —
+    and was being filtered out. The reviewer then correctly but
+    unhelpfully said 'APK missing' on a workspace where the APK was
+    present. We now allow-list binary deliverable suffixes inside
+    otherwise-skipped dirs and list them as ``path (Nbytes, binary)``
+    rather than trying to read their content (which would garble for
+    a multi-megabyte binary).
+    """
     if not workspace.exists():
         return "(workspace missing)"
     skip_dir_names = {"skills", ".claude", ".gradle", ".idea", "build", "node_modules", "__pycache__", "venv", ".venv"}
     files: list[Path] = []
+    binaries: list[Path] = []
     for p in workspace.rglob("*"):
         if not p.is_file():
             continue
         rel = p.relative_to(workspace)
-        if any(part in skip_dir_names or part.startswith(".") for part in rel.parts[:-1]):
-            continue
         if rel.name.startswith("."):
+            continue
+        in_skip_dir = any(
+            part in skip_dir_names or part.startswith(".")
+            for part in rel.parts[:-1]
+        )
+        if _is_binary_deliverable(rel.name):
+            # Always surface binary deliverables, even when their parent
+            # dir is on the skip list (build/, dist/, target/ etc.).
+            binaries.append(p)
+            continue
+        if in_skip_dir:
             continue
         files.append(p)
     files = sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:max_files]
-    if not files:
+    binaries = sorted(binaries, key=lambda p: p.stat().st_size, reverse=True)[:10]
+    if not files and not binaries:
         return "(no user-facing artifacts found)"
     lines = []
+    for p in binaries:
+        size = p.stat().st_size
+        # No content read — these are real binary outputs and reading
+        # them would either OOM the prompt or feed Claude garbled bytes.
+        lines.append(f"### {p.relative_to(workspace)} ({size}B, binary deliverable)")
     for p in files:
         try:
             size = p.stat().st_size
