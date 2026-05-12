@@ -104,7 +104,8 @@ def set_usage_callback(cb):
     _USAGE_CALLBACK_CTX.set(cb)
 
 
-def _chat(system: str, user: str, max_tokens: int = 2048, skills_context: str = "") -> str:
+def _chat(system: str, user: str, max_tokens: int = 2048, skills_context: str = "",
+          caller: str | None = None) -> str:
     """Single chat completion against Databricks. Adds the skills_context
     (if any) into the system message so the agent always has the global
     skills + per-task SKILL brief in front of it.
@@ -114,7 +115,25 @@ def _chat(system: str, user: str, max_tokens: int = 2048, skills_context: str = 
     fallback for plain Exceptions that some provider integrations raise.
     Jittered backoff so synchronized retries don't pile onto the gateway:
     1s/2s/4s base + 0–1s jitter, max 4 attempts (~10s total wait).
+
+    Per-call telemetry (post-Phase-4 cost analysis):
+      The optional `caller` arg tags the call site so we can attribute
+      cost per-phase (think_and_ask, build_brief, review_action,
+      final_review, ...) without grepping. Auto-detected from the
+      caller frame when omitted so existing call sites don't need to
+      change. Per-call usage flows through the same usage_callback the
+      supervisor already listens to — _on_databricks_usage now also
+      receives the caller tag so it can append a per-call
+      `kind="llm_call"` log entry for offline analysis.
     """
+    if caller is None:
+        try:
+            import inspect
+            frm = inspect.currentframe()
+            if frm and frm.f_back:
+                caller = frm.f_back.f_code.co_name or "?"
+        except Exception:
+            caller = "?"
     full_system = system
     if skills_context:
         full_system = (
@@ -151,10 +170,16 @@ def _chat(system: str, user: str, max_tokens: int = 2048, skills_context: str = 
             try:
                 cb = _USAGE_CALLBACK_CTX.get()
                 if cb and getattr(response, "usage", None):
-                    cb(
-                        getattr(response.usage, "prompt_tokens", 0) or 0,
-                        getattr(response.usage, "completion_tokens", 0) or 0,
-                    )
+                    in_tok = getattr(response.usage, "prompt_tokens", 0) or 0
+                    out_tok = getattr(response.usage, "completion_tokens", 0) or 0
+                    # Per-call telemetry. Old callbacks accepted (in,
+                    # out) only — new optional kwargs let the supervisor
+                    # tag the call site without breaking back-compat.
+                    try:
+                        cb(in_tok, out_tok, caller=caller, system_chars=len(full_system),
+                           user_chars=len(user), max_tokens=max_tokens)
+                    except TypeError:
+                        cb(in_tok, out_tok)
             except Exception:
                 pass
             return response.choices[0].message.content or ""

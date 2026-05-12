@@ -710,7 +710,27 @@ class SupervisorLoop:
         elif review["decision"] == "request_evidence":
             self.task.corrections.append(f"[evidence-needed] {review['message']}")
 
-    def _on_databricks_usage(self, in_tokens: int, out_tokens: int):
+    def _on_databricks_usage(self, in_tokens: int, out_tokens: int,
+                             caller: str | None = None,
+                             system_chars: int = 0, user_chars: int = 0,
+                             max_tokens: int = 0):
+        # Per-call cost telemetry (post-Phase-4 cost analysis). Each
+        # _chat() call lands here with its caller tag. We persist a
+        # structured llm_call event so we can later run "what does
+        # each phase cost" reports without re-running tasks.
+        if caller:
+            usd_in = (in_tokens / 1_000_000) * 5.0
+            usd_out = (out_tokens / 1_000_000) * 25.0
+            STORE.append_log(self.task.id, {
+                "kind": "llm_call",
+                "caller": caller,
+                "in_tokens": in_tokens,
+                "out_tokens": out_tokens,
+                "system_chars": system_chars,
+                "user_chars": user_chars,
+                "max_tokens": max_tokens,
+                "usd_estimate": round(usd_in + usd_out, 4),
+            })
         # Audit 5-r bug fix (PHK3 hardening): also halt the task when
         # the Databricks token cap is breached. add_cost returns False
         # on either cap; we already enforce the Claude USD cap at the
