@@ -35,9 +35,11 @@ def upsert_task(state) -> None:
                                cost_databricks_in, cost_databricks_out, cost_claude_usd,
                                keep_workspace, escalation, escalation_set_at,
                                user_notes, corrections, escalation_answer,
-                               claude_plan, skill_preview)
+                               claude_plan, skill_preview,
+                               prompt_versions, wall_time_secs, claude_turn_count)
             VALUES (%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,
-                    %s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s)
+                    %s::jsonb,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,
+                    %s::jsonb,%s,%s)
             ON CONFLICT (id) DO UPDATE SET
               goal=EXCLUDED.goal, clarifications=EXCLUDED.clarifications,
               workspace=EXCLUDED.workspace, status=EXCLUDED.status,
@@ -55,7 +57,10 @@ def upsert_task(state) -> None:
               corrections=EXCLUDED.corrections,
               escalation_answer=EXCLUDED.escalation_answer,
               claude_plan=EXCLUDED.claude_plan,
-              skill_preview=EXCLUDED.skill_preview
+              skill_preview=EXCLUDED.skill_preview,
+              prompt_versions=EXCLUDED.prompt_versions,
+              wall_time_secs=EXCLUDED.wall_time_secs,
+              claude_turn_count=EXCLUDED.claude_turn_count
             """,
             (
                 state.id, state.goal, json.dumps(state.clarifications),
@@ -82,6 +87,12 @@ def upsert_task(state) -> None:
                 getattr(state, "escalation_answer", None),
                 json.dumps(getattr(state, "claude_plan", []) or []),
                 getattr(state, "skill_preview", "") or "",
+                # T7 (DOC3 + STREAM-TIME): prompt version audit trail
+                # + per-task wall-time + Claude turn count for
+                # measuring C1 savings and spotting pathological runs.
+                json.dumps(getattr(state, "prompt_versions", {}) or {}),
+                getattr(state, "wall_time_secs", None),
+                int(getattr(state, "claude_turn_count", 0) or 0),
             ),
         )
 

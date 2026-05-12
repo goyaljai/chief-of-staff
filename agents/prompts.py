@@ -24,6 +24,8 @@ Public API:
                                               parse global.md (lessons.py,
                                               regression tests).
 """
+import hashlib
+import os
 from pathlib import Path
 
 from config import PROJECT_ROOT, PROMPTS_DIR
@@ -40,8 +42,34 @@ MAX_LEARNED_ENTRIES = 50
 _LEARNED_SECTION_CHAR_BUDGET = 8000
 
 
+def _prompts_dir() -> Path:
+    """The directory to load prompts from. Honors COS_PROMPT_OVERRIDE_DIR
+    so a staging deploy can run an alternate prompt set without merging
+    it (DOC3 — Phase 4 prerequisite for C2)."""
+    override = os.environ.get("COS_PROMPT_OVERRIDE_DIR")
+    if override:
+        p = Path(override).expanduser().resolve()
+        if p.is_dir():
+            return p
+    return PROMPTS_DIR
+
+
 def _load_prompt(name: str) -> str:
-    return (PROMPTS_DIR / f"{name}.md").read_text()
+    return (_prompts_dir() / f"{name}.md").read_text()
+
+
+def prompt_version(name: str) -> str:
+    """Return a short content-hash version of the named prompt file
+    (DOC3 — Phase 3.5 hardening). Used to record on each task row
+    which prompt revision the run used. 12 hex chars is plenty for
+    audit-trail uniqueness; collisions don't matter because it's an
+    audit aid, not a uniqueness key.
+    """
+    try:
+        text = _load_prompt(name)
+    except Exception:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 def _load_skills(workspace: str | Path | None = None, inline_skill: str = "") -> str:

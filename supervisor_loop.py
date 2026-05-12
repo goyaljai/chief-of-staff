@@ -7,6 +7,7 @@ The HUMAN USER is the Supervisor. This loop runs on their behalf.
 """
 import asyncio
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -598,6 +599,20 @@ class SupervisorLoop:
         self._self_check_count = 0
         STORE.register_runner(task.id, self.runner)
         set_usage_callback(self._on_databricks_usage)
+        # T7 (DOC3): record which prompt versions this task ran against
+        # at task-start time. Each value is a 12-char content hash from
+        # agents.prompts.prompt_version(). Persisted on the task row at
+        # the next _persist call. The audit trail lets us answer
+        # "what changed between task X (failed) and task Y (passed)?"
+        # without re-deploying or guessing.
+        try:
+            from agents.prompts import prompt_version
+            self.task.prompt_versions = {
+                "orchestrator": prompt_version("orchestrator"),
+                "reviewer": prompt_version("reviewer"),
+            }
+        except Exception:
+            self.task.prompt_versions = {}
 
     def _build_coaching_prompt(self, coaching: dict) -> str:
         """Render the reviewer's mid-stream `correct` decision as a
@@ -746,12 +761,69 @@ class SupervisorLoop:
                     "distance": library_match.get("distance"),
                 })
 
-            skill_md = self.orchestrator.generate_skill_brief(
-                self.task.goal,
-                self.task.clarifications,
-                skill_preview=getattr(self.task, "skill_preview", "") or "",
-                library_match=library_match,
-            )
+            # C2 (Phase 4 cost reduction, gated by COS_MERGED_BRIEF):
+            # When the flag is set, ask the LLM for both SKILL.md and
+            # the executor brief in a single call. Saves ~$0.05/task.
+            # Opt-in until we A/B verify; if Claude didn't follow the
+            # marker discipline, _split_merged_skill_brief returns
+            # ('', '') and we fall through to the two-call path.
+            #
+            # Audit 6-r1 fix: accept "1" / "true" / "yes" / "on"
+            # case-insensitive instead of strict "1" — footgun
+            # avoidance, COS_MERGED_BRIEF=true was silently keeping
+            # the slow path before.
+            merged_brief: str | None = None
+            _merged_flag = os.environ.get("COS_MERGED_BRIEF", "").strip().lower()
+            if _merged_flag in ("1", "true", "yes", "on"):
+                # The merged call needs env_audit context too — run it
+                # early in this branch so both phases see it.
+                try:
+                    from services.env_audit import audit as _envaudit, render_brief_block as _envrender
+                    _ea = _envaudit()
+                    _eblock = _envrender(_ea)
+                    STORE.append_log(self.task.id, {
+                        "kind": "env_audit",
+                        "available": [k for k, v in _ea.items() if v],
+                        "missing": [k for k, v in _ea.items() if not v],
+                        "phase": "merged_pre_brief",
+                    })
+                except Exception:
+                    _eblock = ""
+                try:
+                    _ms, _mb = self.orchestrator.generate_skill_and_brief(
+                        self.task.goal,
+                        self.task.clarifications,
+                        str(self.workspace),
+                        skill_preview=getattr(self.task, "skill_preview", "") or "",
+                        library_match=library_match,
+                        env_audit=_eblock,
+                    )
+                    if _ms and _mb:
+                        STORE.append_log(self.task.id, {
+                            "kind": "merged_brief_used",
+                            "skill_len": len(_ms), "brief_len": len(_mb),
+                        })
+                        skill_md = _ms
+                        self.task.brief = _mb
+                        merged_brief = _mb
+                    else:
+                        STORE.append_log(self.task.id, {
+                            "kind": "merged_brief_fallback",
+                            "reason": "missing ===SKILL=== or ===BRIEF=== markers",
+                        })
+                except Exception as _e:
+                    STORE.append_log(self.task.id, {
+                        "kind": "merged_brief_fallback",
+                        "reason": f"exception: {_e}",
+                    })
+
+            if merged_brief is None:
+                skill_md = self.orchestrator.generate_skill_brief(
+                    self.task.goal,
+                    self.task.clarifications,
+                    skill_preview=getattr(self.task, "skill_preview", "") or "",
+                    library_match=library_match,
+                )
             save_task_skill(str(self.workspace), skill_md)
             self.task.skill_md = skill_md
             name, desc = _parse_skill_frontmatter(skill_md)
@@ -776,34 +848,48 @@ class SupervisorLoop:
         # deliverable shape if the obvious path is blocked (e.g. no
         # Android SDK → propose Expo Go QR instead). Total wall-time
         # ~400ms (parallel probes), worth the spend.
-        STORE.append_log(self.task.id, {"kind": "phase", "phase": "env_audit"})
-        try:
-            from services.env_audit import audit, render_brief_block
-            env_audit_result = audit()
-            env_audit_block = render_brief_block(env_audit_result)
+        # C2: skip when the merged path already produced the brief.
+        if merged_brief is None:
+            STORE.append_log(self.task.id, {"kind": "phase", "phase": "env_audit"})
+            try:
+                from services.env_audit import audit, render_brief_block
+                env_audit_result = audit()
+                env_audit_block = render_brief_block(env_audit_result)
+                STORE.append_log(self.task.id, {
+                    "kind": "env_audit",
+                    "available": [k for k, v in env_audit_result.items() if v],
+                    "missing": [k for k, v in env_audit_result.items() if not v],
+                })
+            except Exception as e:
+                STORE.append_log(self.task.id, {"kind": "env_audit_failed", "msg": str(e)})
+                env_audit_block = ""
+
+            STORE.set_status(self.task.id, "briefing")
+            STORE.append_log(self.task.id, {"kind": "phase", "phase": "build_brief"})
+
+            try:
+                self.task.brief = self.orchestrator.build_brief(
+                    self.task.goal, self.task.clarifications, str(self.workspace),
+                    inline_skill=self.task.skill_md or "",
+                    env_audit=env_audit_block,
+                )
+            except Exception as e:
+                STORE.append_log(self.task.id, {"kind": "error", "where": "build_brief", "msg": str(e)})
+                STORE.set_status(self.task.id, "failed")
+                self.task.result = {"success": False, "error": f"build_brief failed: {e}"}
+                return
+        else:
+            # Merged path already produced both. Audit 6-r2 fix: emit
+            # the same phase + brief log events that the two-call path
+            # writes, so the dashboard / observability sees a complete
+            # chronological trail. Status reflects briefing complete.
+            STORE.append_log(self.task.id, {"kind": "phase", "phase": "build_brief"})
+            STORE.set_status(self.task.id, "briefing")
             STORE.append_log(self.task.id, {
-                "kind": "env_audit",
-                "available": [k for k, v in env_audit_result.items() if v],
-                "missing": [k for k, v in env_audit_result.items() if not v],
+                "kind": "brief",
+                "text": (self.task.brief or "")[:500],
+                "via": "merged_call",
             })
-        except Exception as e:
-            STORE.append_log(self.task.id, {"kind": "env_audit_failed", "msg": str(e)})
-            env_audit_block = ""
-
-        STORE.set_status(self.task.id, "briefing")
-        STORE.append_log(self.task.id, {"kind": "phase", "phase": "build_brief"})
-
-        try:
-            self.task.brief = self.orchestrator.build_brief(
-                self.task.goal, self.task.clarifications, str(self.workspace),
-                inline_skill=self.task.skill_md or "",
-                env_audit=env_audit_block,
-            )
-        except Exception as e:
-            STORE.append_log(self.task.id, {"kind": "error", "where": "build_brief", "msg": str(e)})
-            STORE.set_status(self.task.id, "failed")
-            self.task.result = {"success": False, "error": f"build_brief failed: {e}"}
-            return
 
         STORE.append_log(self.task.id, {"kind": "brief", "text": self.task.brief[:500]})
 
@@ -1237,6 +1323,11 @@ class SupervisorLoop:
 
         if event.type == "tool_use":
             self._action_count += 1
+            # T7 (STREAM-TIME): increment per-task Claude turn count so
+            # we can later compare "200-turn loop" pathological tasks
+            # against typical "12-turn quick task" runs. Persisted at
+            # the next _persist on terminal status.
+            self.task.claude_turn_count += 1
             STORE.append_log(self.task.id, {
                 "kind": "tool_use",
                 "tool": event.tool_name,

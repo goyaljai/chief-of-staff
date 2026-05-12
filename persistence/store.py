@@ -59,6 +59,18 @@ class TaskState:
     keep_workspace: bool = False
     user_notes: list[str] = field(default_factory=list)
     claude_plan: list[dict] = field(default_factory=list)
+    # T7 (DOC3 — prompt version audit trail): hash-fingerprint of every
+    # prompt file the orchestrator/reviewer used at task start. Lets us
+    # later answer "what changed between task X (failed) and task Y
+    # (passed)?" — necessary safety rail before we A/B-roll C2's
+    # merged skill+brief prompt rewrite.
+    prompt_versions: dict[str, str] = field(default_factory=dict)
+    # T7 (STREAM-TIME — measure task throughput). Until now we tracked
+    # tokens + USD but not wall-time or how many tool calls Claude made.
+    # Both are needed to MEASURE the C1 fast-path savings (Phase 4) and
+    # to spot pathological tasks (200-turn loops, 30+ minute runs).
+    wall_time_secs: float | None = None
+    claude_turn_count: int = 0
 
     def to_public(self) -> dict:
         return {
@@ -243,9 +255,16 @@ class TaskStore:
     def set_status(self, tid: str, status: str):
         if tid not in self._tasks:
             return
-        self._tasks[tid].status = status
+        s = self._tasks[tid]
+        s.status = status
         if status in ("done", "failed", "abandoned", "cancelled"):
-            self._tasks[tid].finished_at = time.time()
+            s.finished_at = time.time()
+            # T7 (STREAM-TIME): capture wall-time at the moment we
+            # transition to terminal status. Computed once — if we
+            # rolled back into a non-terminal status and re-finished
+            # later (rare), keep the original measurement.
+            if s.wall_time_secs is None and s.started_at:
+                s.wall_time_secs = max(0.0, s.finished_at - s.started_at)
         self._persist(self._tasks[tid])
         for q in list(self._subscribers.get(tid, [])):
             try:
@@ -438,6 +457,10 @@ class TaskStore:
                 escalation_answer=row.get("escalation_answer"),
                 claude_plan=_as_obj(row.get("claude_plan"), []) or [],
                 skill_preview=row.get("skill_preview") or "",
+                # T7: rehydrate prompt versions + STREAM-TIME counters.
+                prompt_versions=_as_obj(row.get("prompt_versions"), {}) or {},
+                wall_time_secs=row.get("wall_time_secs"),
+                claude_turn_count=row.get("claude_turn_count") or 0,
             )
             for l in full["logs"][-100:]:
                 p = _as_obj(l["payload"], None)

@@ -37,6 +37,8 @@ Responsibilities, in the order they fire across a task lifecycle:
   9. answer_from_history  /ask synthesizer — answers questions using
                           retrieved past task snippets.
 """
+import re
+
 from .llm import _chat, _extract_json
 from .prompts import _load_prompt, _load_skills
 
@@ -86,6 +88,44 @@ def _classify_task_family(task: str) -> str:
     )):
         return "ops"
     return ""
+
+
+def _split_merged_skill_brief(raw: str) -> tuple[str, str]:
+    """Split a merged ===SKILL=== / ===BRIEF=== response into the two
+    sections (C2). Returns (skill_md, brief). Either may be empty
+    when the LLM didn't follow marker discipline — the caller falls
+    back to the two-call path.
+
+    Tolerates the common LLM mistakes: extra whitespace around
+    markers, trailing code fences, optional blank lines between
+    sections. Refuses to silently merge — if the BRIEF marker is
+    missing, returns ('', '') so the supervisor falls back."""
+    if not raw:
+        return ("", "")
+    text = raw.strip()
+    # Strip an outer code fence if Claude wrapped the whole response.
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    skill_pat = re.compile(r"^===\s*SKILL\s*===\s*$", re.IGNORECASE | re.MULTILINE)
+    brief_pat = re.compile(r"^===\s*BRIEF\s*===\s*$", re.IGNORECASE | re.MULTILINE)
+    sm = skill_pat.search(text)
+    bm = brief_pat.search(text)
+    if not bm:
+        return ("", "")
+    if sm and sm.start() < bm.start():
+        skill_md = text[sm.end():bm.start()].strip()
+    else:
+        # No SKILL marker (or it appears after BRIEF) — content before
+        # BRIEF treated as the skill section.
+        skill_md = text[:bm.start()].strip()
+        # Strip any leading "===SKILL===" residue we missed.
+        skill_md = re.sub(r"^===\s*SKILL\s*===\s*\n?", "", skill_md, flags=re.IGNORECASE)
+    brief = text[bm.end():].strip()
+    # Drop trailing fences if present.
+    brief = re.sub(r"\n?```\s*$", "", brief)
+    skill_md = re.sub(r"\n?```\s*$", "", skill_md)
+    return (skill_md, brief)
 
 
 def _load_family_template(family: str) -> str:
@@ -314,6 +354,98 @@ class Orchestrator:
                 "Be specific to THIS task. Output only the SKILL.md content. No preamble."
             )
         return _chat(self.system, user, max_tokens=3500, skills_context=skills).strip()
+
+    def generate_skill_and_brief(
+        self,
+        task: str,
+        clarifications: dict[str, str],
+        workspace: str,
+        skill_preview: str = "",
+        library_match: dict | None = None,
+        env_audit: str = "",
+    ) -> tuple[str, str]:
+        """C2 (Phase 4 cost reduction) — merged skill+brief single-call.
+
+        Why this exists:
+          generate_skill_brief and build_brief used to be two separate
+          LLM calls that share most of their context (task, clarifications,
+          library_match, skill_preview, family template). At ~$0.05 per
+          call, doing them separately wasted ~$0.05/task. This merged
+          version asks for both outputs in one prompt separated by
+          ===SKILL=== / ===BRIEF=== markers and parses the response.
+
+        Why behind a flag (COS_MERGED_BRIEF=1):
+          C2 is a meaningful prompt rewrite. Default still uses the
+          two-call path. Flip COS_MERGED_BRIEF=1 in staging to A/B
+          against the two-call output before flipping prod default.
+          The DOC3 prompt-versioning machinery records which prompt
+          this task ran against so the comparison is auditable.
+
+        Output marker discipline:
+          Claude must emit BOTH markers. If either is missing, we fall
+          back to the two-call path inside the supervisor (caller
+          checks for empty strings). No silent failure.
+
+        Returns ``(skill_md, brief)`` — both strings; either may be
+        empty when the LLM didn't follow the marker discipline.
+        """
+        skills = _load_skills()
+        clarif_text = "\n".join(f"- Q: {q}\n  A: {a}" for q, a in clarifications.items()) or "(none)"
+        family = _classify_task_family(task)
+        template_text = _load_family_template(family)
+        template_section = (
+            f"\n\nFamily template ({family}) — use as a starting scaffold; "
+            "adapt to THIS task, don't paste verbatim:\n\n"
+            f"```\n{template_text.strip()}\n```\n"
+        ) if template_text else ""
+        library_section = ""
+        if library_match:
+            library_section = (
+                "\n\nA past task had a similar SKILL.md you can reuse as a starting point "
+                f"(matched on description, distance={library_match.get('distance', 0):.3f}):\n\n"
+                f"{(library_match.get('meta') or {}).get('skill_md_preview', '')[:1500]}\n\n"
+                "Refine that for THIS task. If the past skill doesn't actually fit, ignore it.\n"
+            )
+        env_block = f"\n{env_audit}\n" if env_audit else ""
+        preview_block = (
+            f"Your earlier preview (from question-asking phase):\n{skill_preview}\n\n"
+            if skill_preview else ""
+        )
+
+        user = (
+            "Phase 2+3 MERGED — produce BOTH the SKILL.md AND the executor brief in one call.\n\n"
+            f"Task: {task}\n\n"
+            f"{preview_block}"
+            f"Clarifications:\n{clarif_text}\n"
+            f"{env_block}"
+            f"{template_section}"
+            f"{library_section}\n"
+            "Output EXACTLY two sections, each preceded by its marker on its own line:\n\n"
+            "===SKILL===\n"
+            "<the SKILL.md — frontmatter + 7 sections per Anthropic skill-creator format. "
+            "Format:\n"
+            "---\n"
+            "name: <short-kebab-case-id>\n"
+            "description: <one sentence; pushy so similar tasks trigger it>\n"
+            "---\n\n"
+            "# <Title>\n\n"
+            "## Objective\n## What 'done' means\n## Knowledge / standards that apply\n"
+            "## Failure patterns to watch for\n## Verification required\n## Gotchas\n"
+            "## Scope boundaries>\n\n"
+            "===BRIEF===\n"
+            "<the executor brief Claude Code receives — Objective, Deliverable file(s), "
+            "What needs to be built, Done/acceptance criteria, Constraints, Quality bar. "
+            "Include the DELIVERABLE_PATHS marker instruction at the bottom: "
+            "'Your final assistant message must end with `DELIVERABLE_PATHS: <paths>` "
+            "naming only user-facing files'. Append `## Steps` only when 2+ steps "
+            "are genuinely independent.>\n\n"
+            "Critical: emit BOTH markers verbatim on their own lines. The supervisor "
+            "splits on them. No preamble before ===SKILL===, no commentary between sections."
+        )
+        # Larger budget than either single call — needs to fit both outputs.
+        raw = _chat(self.system, user, max_tokens=5500, skills_context=skills)
+        skill_md, brief = _split_merged_skill_brief(raw)
+        return skill_md, brief
 
     def parse_dag(self, brief: str) -> list[dict] | None:
         """Parse the optional `## Steps` section into DAG step dicts.
