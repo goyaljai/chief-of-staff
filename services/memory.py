@@ -106,37 +106,65 @@ def add_task_memory(
         {"role": "user", "content": body_user},
         {"role": "assistant", "content": body_assistant},
     ]
-    try:
-        client.add(messages, user_id=user_id, metadata=metadata or {})
-        log.info("[mem0] stored memory for user=%s task=%r", user_id, task[:60])
-        return True
-    except Exception as e:
-        log.warning("[mem0] add failed; continuing: %s", e)
-        return False
+
+    # Bug fix (Phase 3 audit r2): the Mem0 cloud .add() is synchronous
+    # HTTP and takes 200-500ms. Calling it inline from the supervisor's
+    # async run() loop blocks the asyncio event loop for that window,
+    # stalling every other concurrently running task. Mem0 writes are
+    # fire-and-forget — if they drop on a transient error we lose one
+    # memory, not correctness. Run in a daemon thread so the supervisor
+    # returns immediately.
+    def _do_add() -> None:
+        try:
+            client.add(messages, user_id=user_id, metadata=metadata or {})
+            log.info("[mem0] stored memory for user=%s task=%r", user_id, task[:60])
+        except Exception as e:
+            log.warning("[mem0] add failed; continuing: %s", e)
+
+    threading.Thread(target=_do_add, daemon=True, name="mem0-add").start()
+    return True
 
 
 def get_relevant_memories(
     query: str,
     user_id: str = _DEFAULT_USER_ID,
     limit: int = 5,
+    timeout_secs: float = 3.0,
 ) -> list[dict]:
     """Retrieve memories relevant to ``query``. Returns a list of
     ``{"memory": str, "score": float, ...}`` dicts (Mem0's native
-    shape). Empty list on miss / disabled / error."""
+    shape). Empty list on miss / disabled / error / timeout.
+
+    Bug fix (Phase 3 audit r2): the Mem0 SDK's .search() is sync HTTP
+    with no built-in deadline. Wrapping it in a thread + future with a
+    hard timeout prevents a slow / unreachable Mem0 endpoint from
+    stalling the orchestrator forever. 3s is a generous ceiling — a
+    healthy Mem0 round-trip is ~200ms.
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
     client = _get_client()
     if client is None:
         return []
     if not query:
         return []
-    try:
+
+    def _do_search():
         # Mem0 v2 requires filters={'user_id': ...}; v1's top-level
         # user_id kwarg is rejected. Pass both via filters to stay
         # forward-compatible.
-        result = client.search(
+        return client.search(
             query=query[:1000],
             filters={"user_id": user_id},
             limit=limit,
         )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(_do_search).result(timeout=timeout_secs)
+    except FuturesTimeout:
+        log.warning("[mem0] search exceeded %.1fs timeout; returning empty", timeout_secs)
+        return []
     except Exception as e:
         log.warning("[mem0] search failed; returning empty: %s", e)
         return []

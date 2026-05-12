@@ -135,11 +135,18 @@ def _parse_escalation(message: str) -> dict:
     lines = text.splitlines()
 
     # Generic A) / B) extractor — used for both shapes.
-    option_a = next((re.sub(r"^[\s\*\-]*A[\)\.]\s*", "", l).strip()
-                     for l in lines if re.match(r"^[\s\*\-]*A[\)\.]", l)),
+    # Bug fix (Phase 3 audit r2): the previous regex `^[\s\*\-]*A[\)\.]`
+    # matched any line beginning with "A." or "A)" — including prose
+    # like "A.I. is interesting." (line starts with "A.", remaining
+    # text "I. is interesting" became option_a). Require a whitespace
+    # or end-of-string after the delimiter so structured "A) install"
+    # matches but "A.I." does not (no space after the period in the
+    # acronym).
+    option_a = next((re.sub(r"^[\s\*\-]*A[\)\.]\s+", "", l).strip()
+                     for l in lines if re.match(r"^[\s\*\-]*A[\)\.](?:\s+|$)", l)),
                     "Proceed as planned")
-    option_b = next((re.sub(r"^[\s\*\-]*B[\)\.]\s*", "", l).strip()
-                     for l in lines if re.match(r"^[\s\*\-]*B[\)\.]", l)),
+    option_b = next((re.sub(r"^[\s\*\-]*B[\)\.]\s+", "", l).strip()
+                     for l in lines if re.match(r"^[\s\*\-]*B[\)\.](?:\s+|$)", l)),
                     "Stop and wait for clarification")
 
     # G7+ env-escalation marker. Trigger on either an explicit
@@ -162,7 +169,10 @@ def _parse_escalation(message: str) -> dict:
                 why_buf.append(stripped)
             continue
         if in_why:
-            if re.match(r"^[\s\*\-]*OPTIONS[:\s]", s, re.IGNORECASE) or re.match(r"^[\s\*\-]*[ABab][\)\.]", s):
+            # Same Bug 5 tightening — require a whitespace after the
+            # A./B. delimiter so prose acronyms don't end the WHY block
+            # prematurely.
+            if re.match(r"^[\s\*\-]*OPTIONS[:\s]", s, re.IGNORECASE) or re.match(r"^[\s\*\-]*[ABab][\)\.](?:\s+|$)", s):
                 in_why = False
                 continue
             if s:

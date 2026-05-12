@@ -268,6 +268,14 @@ async def _send_artifacts(context, chat_id: int, state: dict):
     skipped_empty: list[str] = []
     skipped_oversize: list[str] = []
 
+    # Bug fix (Phase 3 audit r2): canonicalize the workspace root once
+    # so every deliverable can be checked for containment via prefix.
+    # Symlinks inside the workspace pointing OUTSIDE it would otherwise
+    # let us send arbitrary files (e.g. a `link.txt` deliverable that
+    # symlinks to /etc/passwd). os.path.isfile follows symlinks so the
+    # naive check passed it through.
+    workspace_root = os.path.realpath(workspace)
+
     for rel_path in deliverables:
         if not isinstance(rel_path, str) or not rel_path.strip():
             continue
@@ -278,6 +286,18 @@ async def _send_artifacts(context, chat_id: int, state: dict):
             continue
 
         abs_path = os.path.join(workspace, rel_path)
+        # Resolve symlinks then verify the resolved path is still
+        # under the workspace. Rejects symlink-based escapes.
+        try:
+            real_abs = os.path.realpath(abs_path)
+        except Exception:
+            skipped_missing.append(rel_path)
+            continue
+        if not (real_abs == workspace_root or real_abs.startswith(workspace_root + os.sep)):
+            log.warning("rejecting deliverable that escapes workspace: %s -> %s", rel_path, real_abs)
+            skipped_missing.append(rel_path)
+            continue
+        abs_path = real_abs
         if not os.path.isfile(abs_path):
             skipped_missing.append(rel_path)
             continue

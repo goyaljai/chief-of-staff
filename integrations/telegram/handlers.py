@@ -87,7 +87,15 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _whitelisted(update):
         await _deny(update)
         return ConversationHandler.END
-    context.chat_data.pop("task_id", None)
+    # Bug fix (Phase 3 audit r2): only clearing `task_id` left G9
+    # adaptive-question state (`pending_question`, `answers`,
+    # `task_text`, `questions`, `q_index`) in chat_data, so a new task
+    # started right after /reset could route the user's first message
+    # through receive_answer instead of receive_task. Clear all of
+    # them.
+    for k in ("task_id", "pending_question", "answers",
+              "task_text", "questions", "q_index"):
+        context.chat_data.pop(k, None)
     await update.message.reply_text("Active task forgotten. Next message starts a fresh task.")
     return ConversationHandler.END
 
@@ -141,6 +149,12 @@ async def receive_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 context.chat_data.pop("task_id", None)
 
+    # Bug fix (Phase 3 audit r2): clear any G9 state left over from a
+    # prior aborted conversation before recording the new task. Without
+    # this, a stale pending_question/answers map can leak into the new
+    # /task/questions call's clarifications dict.
+    for k in ("pending_question", "answers", "questions", "q_index"):
+        context.chat_data.pop(k, None)
     context.chat_data["task_text"] = task
 
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)

@@ -67,8 +67,22 @@ def _run_version(args: list[str]) -> str | None:
 
 
 def _check_env_var(name: str) -> str | None:
+    """Read an env var that points to a filesystem location (e.g.
+    ``ANDROID_HOME``). Returns the value only when it actually resolves
+    to an existing directory.
+
+    Bug fix (Phase 3 audit r2): a stale env var (set in shell rc files
+    pointing to a deleted SDK) used to report as "available", which
+    misled the orchestrator into proposing builds that the executor
+    couldn't run. Verify the path before claiming the toolchain is
+    present.
+    """
     v = os.environ.get(name, "").strip()
-    return v or None
+    if not v:
+        return None
+    if not os.path.isdir(v):
+        return None
+    return v
 
 
 def _check_xcode() -> str | None:
